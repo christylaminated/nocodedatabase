@@ -1,0 +1,132 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Typography System using system fonts */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans",
+    "Droid Sans", "Helvetica Neue", sans-serif;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Refined heading weights using system fonts */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", sans-serif;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-weight: 200;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+h2 {
+  font-weight: 200;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+h3 {
+  font-weight: 300;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+/* Body text optimization */
+p,
+span,
+div {
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+}
+
+/* Button typography */
+button {
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+/* Input and form elements */
+input,
+textarea,
+select {
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+
+/* Monospace for code/JSON */
+pre,
+code,
+.font-mono {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+/* Label typography */
+label {
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #007bff;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #0056b3;
+}
+
+/* Smooth transitions for all interactive elements */
+* {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow,
+    transform, filter, backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
+}
+
+/* Enhanced focus states */
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+}
+
+/* Refined button hover states */
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Premium card shadows */
+.shadow-2xl {
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.08);
+}

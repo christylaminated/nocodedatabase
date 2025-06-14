@@ -1,0 +1,8 @@
+/* Additional App-specific styles can go here if needed */
+/* Most styles are in index.css for the Azure Embrace theme */
+
+.App {
+  text-align: left;
+}
+
+/* Any component-specific overrides can be added here */

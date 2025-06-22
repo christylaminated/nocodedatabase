@@ -1,0 +1,233 @@
+"use client"
+
+import { useState } from "react"
+import { ChevronRight, ChevronsRight, Pencil, Check, X, Plus } from "lucide-react"
+
+type JsonTreeViewProps = {
+  data: any
+  onUpdate: (data: any) => void
+  rootName?: string
+}
+
+type JsonNodeProps = {
+  name: string
+  value: any
+  path: (string | number)[]
+  onUpdate: (path: (string | number)[], value: any) => void
+  isRoot?: boolean
+}
+
+const JsonNode = ({ name, value, path, onUpdate, isRoot = false }: JsonNodeProps) => {
+  const [isOpen, setIsOpen] = useState(isRoot)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState(value)
+
+  const isObject = typeof value === "object" && value !== null && !Array.isArray(value)
+  const isArray = Array.isArray(value)
+
+  const handleToggle = () => {
+    if (isObject || isArray) {
+      setIsOpen(!isOpen)
+    }
+  }
+
+  const handleEdit = () => {
+    if (!isObject && !isArray) {
+      setEditValue(value)
+      setIsEditing(true)
+    }
+  }
+
+  const handleCancel = () => {
+    setIsEditing(false)
+  }
+
+  const handleSave = () => {
+    // Basic type coercion
+    let finalValue: any = editValue
+    if (!isNaN(value) && !isNaN(Number(editValue))) {
+      finalValue = Number(editValue)
+    } else if (typeof value === 'boolean') {
+      finalValue = String(editValue).toLowerCase() === 'true'
+    }
+
+    onUpdate(path, finalValue)
+    setIsEditing(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSave()
+    } else if (e.key === 'Escape') {
+      handleCancel()
+    }
+  }
+
+  return (
+    <div className={`ml-${isRoot ? 0 : 6} font-mono text-sm`}>
+      <div className="flex items-center group cursor-pointer" onClick={handleToggle}>
+        {(isObject || isArray) && (
+          <ChevronRight
+            className={`w-4 h-4 mr-1 text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-90" : ""}`}
+          />
+        )}
+        <span className="text-gray-900 font-semibold">{name}:</span>
+        {!isObject && !isArray && !isEditing && (
+          <>
+            <span className={`ml-2 ${typeof value === 'string' ? 'text-emerald-700' : 'text-blue-700'}`}>
+              {typeof value === 'string' ? `"${value}"` : String(value)}
+            </span>
+            <Pencil className="w-3 h-3 ml-2 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" onClick={handleEdit} />
+          </>
+        )}
+        {isEditing && (
+          <div className="flex items-center ml-2">
+            <input
+              type="text"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onBlur={handleSave}
+              autoFocus
+              className="px-1 py-0 border border-blue-400 rounded-sm bg-blue-50 focus:outline-none"
+            />
+            <Check className="w-4 h-4 text-green-600 cursor-pointer mx-1" onClick={handleSave} />
+            <X className="w-4 h-4 text-red-600 cursor-pointer" onClick={handleCancel} />
+          </div>
+        )}
+      </div>
+
+      {isOpen && (isObject || isArray) && (
+        <div className="border-l border-gray-200">
+          {Object.entries(value).map(([key, childValue]) => (
+            <JsonNode
+              key={key}
+              name={key}
+              value={childValue}
+              path={[...path, key]}
+              onUpdate={onUpdate}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Helper: get input type from fieldType
+const getInputType = (fieldType: string) => {
+  switch (fieldType) {
+    case 'EMAIL': return 'email';
+    case 'NUMERIC':
+    case 'CURRENCY': return 'number';
+    case 'DATE': return 'date';
+    case 'DATE_TIME': return 'datetime-local';
+    case 'BOOLEAN': return 'checkbox';
+    case 'URL': return 'url';
+    default: return 'text';
+  }
+}
+
+// Modal form for adding a document
+const AddDocumentModal = ({ schema, open, onClose }: { schema: any, open: boolean, onClose: (success?: boolean) => void }) => {
+  const [formData, setFormData] = useState<any>({});
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (!open) return null;
+  if (!schema || !Array.isArray(schema.fields)) return null;
+
+  const handleChange = (field: any, value: any) => {
+    setFormData((prev: any) => ({ ...prev, [field.fieldId]: value }));
+  };
+
+  const handleSubmit = async (e: any) => {
+    e.preventDefault();
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      // Optionally validate required fields here
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formId: schema.formId, data: formData })
+      });
+      if (!response.ok) throw new Error('Failed to add document');
+      onClose(true);
+    } catch (err: any) {
+      setError(err.message || 'Unknown error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-lg p-8 min-w-[320px] max-w-[90vw]">
+        <h2 className="text-xl font-semibold mb-4">Add Document to {schema.name || schema.formId}</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {schema.fields.map((field: any) => (
+            <div key={field.fieldId} className="flex flex-col">
+              <label className="font-medium mb-1">{field.fieldId}{field.isRequired ? ' *' : ''}</label>
+              <input
+                type={getInputType(field.fieldType)}
+                value={formData[field.fieldId] ?? ''}
+                required={!!field.isRequired}
+                minLength={field.length || undefined}
+                pattern={field.pattern || undefined}
+                onChange={e => handleChange(field, field.fieldType === 'BOOLEAN' ? e.target.checked : e.target.value)}
+                className="border rounded px-2 py-1"
+              />
+            </div>
+          ))}
+          {error && <div className="text-red-600 text-sm">{error}</div>}
+          <div className="flex gap-2 mt-4">
+            <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded" disabled={isSubmitting}>{isSubmitting ? 'Adding...' : 'Add Document'}</button>
+            <button type="button" className="bg-gray-200 px-4 py-2 rounded" onClick={() => onClose(false)} disabled={isSubmitting}>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps) => {
+  const [modalSchema, setModalSchema] = useState<any>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const handleUpdate = (path: (string | number)[], newValue: any) => {
+    // Create a deep copy to avoid direct state mutation
+    const newData = JSON.parse(JSON.stringify(data))
+    
+    // Traverse the path to update the value
+    let current = newData
+    for (let i = 0; i < path.length - 1; i++) {
+      current = current[path[i]]
+    }
+    current[path[path.length - 1]] = newValue
+    
+    // Notify the parent component of the change
+    onUpdate(newData)
+  }
+
+  // Helper: get all schemas (array or single)
+  const schemas = Array.isArray(data) ? data : [data];
+
+  return (
+    <div className="p-4 bg-white rounded-lg border border-gray-200">
+      {schemas.map((schema, idx) => (
+        <div key={schema.formId || idx} className="mb-8">
+          <div className="flex items-center mb-2">
+            <span className="font-bold text-lg mr-2">{schema.name || rootName}</span>
+            <button className="ml-auto flex items-center gap-1 bg-emerald-600 text-white px-3 py-1 rounded hover:bg-emerald-700" onClick={() => { setModalSchema(schema); setModalOpen(true); }}>
+              <Plus className="w-4 h-4" /> Add Document
+            </button>
+          </div>
+          <JsonNode name={rootName} value={schema} path={[]} onUpdate={handleUpdate} isRoot />
+        </div>
+      ))}
+      <AddDocumentModal schema={modalSchema} open={modalOpen} onClose={() => { setModalOpen(false); setModalSchema(null); }} />
+    </div>
+  )
+}
+
+export default JsonTreeView 

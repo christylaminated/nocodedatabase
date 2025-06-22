@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react"
 import { Plus, Database, Edit3, Eye, Sparkles, FileText } from "lucide-react"
 import { getLlamaResponse } from "../lib/llamaApi"
+import { getRelationalLlamaResponse } from "../lib/relationalLlama"
+import JsonTreeView from "@/components/JsonTreeView"
 
 type Schema = {
   formId: string;
@@ -20,12 +22,15 @@ export default function NoCodeDatabase() {
   const [updateDescription, setUpdateDescription] = useState("")
   const [selectedSchemaForUpdate, setSelectedSchemaForUpdate] = useState("")
   const [schemas, setSchemas] = useState<Schema[]>([])
+  const [schemaObject, setSchemaObject] = useState<object | null>(null)
   const [message, setMessage] = useState("")
   const [messageType, setMessageType] = useState("")
   const [isGenerating, setIsGenerating] = useState(false);
   const [isLoadingDatabases, setIsLoadingDatabases] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [databasesText, setDatabasesText] = useState("");
+  const [relationalSchema, setRelationalSchema] = useState<string | object | null>(null)
+  const [isGeneratingRelational, setIsGeneratingRelational] = useState(false)
 
   // Clear message after 5 seconds
   useEffect(() => {
@@ -40,36 +45,45 @@ export default function NoCodeDatabase() {
 
   // Handle creating new database structure
   const handleCreateDatabase = async () => {
+    setRelationalSchema(null); // Clear relational schema
     if (!naturalLanguageInput.trim()) {
       setMessage("Please describe what kind of data you want to store.")
       setMessageType("error")
       return
     }
-
     setIsGenerating(true);
     try {
+      console.log("1. Calling LLM with:", naturalLanguageInput);
       const generatedSchema = await getLlamaResponse(naturalLanguageInput);
+      console.log("2. LLM Response:", generatedSchema);
+      
       const codeBlockMatch = generatedSchema.match(/```json\s*([\s\S]+?)```/i);
+      console.log("3. Code block match:", codeBlockMatch);
       const rawJson = codeBlockMatch ? codeBlockMatch[1].trim() : null;
     
       if (!rawJson) {
         throw new Error("No JSON code block found");
       }
     
+      console.log("4. Raw JSON:", rawJson);
       const jsonObject = JSON.parse(rawJson);
-      console.log("Parsed JSON Object:", jsonObject);
-      setDatabasesText(JSON.stringify(jsonObject, null, 2));
-      setMessage("Your database structure has been created successfully.")
+      console.log("5. Parsed JSON Object:", jsonObject);
+      setSchemaObject(jsonObject)
+      setMessage("Your database structure has been created successfully. You can now edit it below.")
       setMessageType("success");
-     // TODO: Implement API call to create database structure
-      // const response = await fetch('http://localhost:4441/no-code-db-api/form/schema', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(generatedSchema)
-      // });
+    
+      const apiResponse = await fetch('http://localhost:4441/no-code-db-api/form/schema', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(jsonObject), 
+      });
 
+      if (!apiResponse.ok) {
+        throw new Error('Failed to save schema to database');
+      }
      
     } catch (error) {
+      console.error("Error details:", error);
       setMessage("Something went wrong. Please try describing your data differently.")
       setMessageType("error");
     } finally {
@@ -87,6 +101,12 @@ export default function NoCodeDatabase() {
       // setSchemas(schemasData);
 
       // TODO: Implement API call to fetch all database structures
+
+      //when a user wants to see all existing database schemas, you need to fetch them from your backend API and display them
+      const reponse = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      const schemasData = await reponse.json();
+      setSchemas(schemasData);
+
     } catch (error) {
       setMessage("Could not load your databases. Please try again.")
       setMessageType("error")
@@ -106,6 +126,13 @@ export default function NoCodeDatabase() {
     try {
       // TODO: Implement LLM call to convert natural language to database updates
       // TODO: Implement API call to update database structure
+      const updateJson = await getLlamaResponse(updateDescription);
+
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/schema/${selectedSchemaForUpdate}', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json'},
+        body: JSON.stringify(updateJson),
+      })
 
       setTimeout(() => {
         setMessage(`Your "${selectedSchemaForUpdate}" database has been updated successfully.`)
@@ -120,6 +147,12 @@ export default function NoCodeDatabase() {
       setIsUpdating(false);
     }
   }
+
+  const handleSchemaUpdate = (updatedSchema: object) => {
+    setSchemaObject(updatedSchema);
+    // You might want to auto-save or provide a save button here
+    console.log("Schema updated in parent:", updatedSchema);
+  };
 
   const examplePrompts = [
     {
@@ -143,6 +176,33 @@ export default function NoCodeDatabase() {
       category: "Event Management",
     },
   ]
+
+  const handleGenerateRelationalDatabase = async () => {
+    setSchemaObject(null); // Clear NoSQL schema
+    if (!naturalLanguageInput.trim()) {
+      setMessage("Please describe what kind of data you want to store.")
+      setMessageType("error")
+      return
+    }
+    setIsGeneratingRelational(true)
+    try {
+      const result = await getRelationalLlamaResponse(naturalLanguageInput)
+      // Extract SQL code block if present
+      let sqlOnly = result
+      const codeBlockMatch = result.match(/```sql\s*([\s\S]+?)```/i)
+      if (codeBlockMatch) {
+        sqlOnly = codeBlockMatch[1].trim()
+      }
+      setRelationalSchema(sqlOnly)
+      setMessage("Your relational database schema has been generated below.")
+      setMessageType("success")
+    } catch (error) {
+      setMessage("Something went wrong. Please try describing your data differently.")
+      setMessageType("error")
+    } finally {
+      setIsGeneratingRelational(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans">
@@ -259,23 +319,42 @@ export default function NoCodeDatabase() {
               </div>
             </div>
 
-            <button
-              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white px-10 py-5 rounded-2xl font-medium text-lg hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
-              onClick={handleCreateDatabase}
-              disabled={isGenerating}
-            >
-              {isGenerating ? (
-                <>
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                  <span>Generating Database Structure...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-6 h-6" />
-                  <span>Generate Database Structure</span>
-                </>
-              )}
-            </button>
+            <div className="flex flex-col md:flex-row gap-4">
+              <button
+                className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white px-10 py-5 rounded-2xl font-medium text-lg hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+                onClick={handleCreateDatabase}
+                disabled={isGenerating}
+              >
+                {isGenerating ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    <span>Generating NoSQL Schema...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-6 h-6" />
+                    <span>Generate NoSQL Schema (MongoDB)</span>
+                  </>
+                )}
+              </button>
+              <button
+                className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 text-white px-10 py-5 rounded-2xl font-medium text-lg hover:from-indigo-700 hover:to-indigo-800 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+                onClick={handleGenerateRelationalDatabase}
+                disabled={isGeneratingRelational}
+              >
+                {isGeneratingRelational ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    <span>Generating Relational Schema...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-6 h-6" />
+                    <span>Generate Relational Database (PostgreSQL)</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </section>
 
@@ -295,23 +374,32 @@ export default function NoCodeDatabase() {
 
           {/* Show All Databases */}
           <div className="mb-10">
-            <button
-              className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-5 rounded-2xl font-medium text-lg hover:bg-blue-600 hover:text-white hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-4"
-              onClick={handleShowAllDatabases}
-              disabled={isLoadingDatabases}
-            >
-              {isLoadingDatabases ? (
-                <>
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-current"></div>
-                  <span>Loading Databases...</span>
-                </>
-              ) : (
-                <>
-                  <Database className="w-6 h-6" />
-                  <span>Load All Databases</span>
-                </>
-              )}
-            </button>
+            <div className="flex flex-col md:flex-row gap-4">
+              <button
+                className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-5 rounded-2xl font-medium text-lg hover:bg-blue-600 hover:text-white hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-4"
+                onClick={handleShowAllDatabases}
+                disabled={isLoadingDatabases}
+              >
+                {isLoadingDatabases ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-current"></div>
+                    <span>Loading Relational Databases...</span>
+                  </>
+                ) : (
+                  <>
+                    <Database className="w-6 h-6" />
+                    <span>Load All Relational Databases</span>
+                  </>
+                )}
+              </button>
+              <button
+                className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-5 rounded-2xl font-medium text-lg hover:bg-blue-600 hover:text-white hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-4"
+                onClick={() => setMessage('Non-relational database loading coming soon!')}
+              >
+                <Database className="w-6 h-6" />
+                <span>Load All Non Relational Databases</span>
+              </button>
+            </div>
           </div>
 
           {/* Update Existing Database */}
@@ -389,8 +477,14 @@ export default function NoCodeDatabase() {
           </div>
 
           <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl p-8 border border-slate-200/50">
-            {databasesText ? (
-              <pre className="bg-gray-100 p-4 rounded-lg overflow-auto">{databasesText}</pre>
+            {relationalSchema ? (
+              typeof relationalSchema === 'string' ? (
+                <pre className="bg-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap">{relationalSchema}</pre>
+              ) : (
+                <JsonTreeView data={relationalSchema} onUpdate={handleSchemaUpdate} rootName="form" />
+              )
+            ) : schemaObject ? (
+              <JsonTreeView data={schemaObject} onUpdate={handleSchemaUpdate} rootName="form" />
             ) : (
               <div className="text-center py-20">
                 <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">

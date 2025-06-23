@@ -4,7 +4,9 @@ import { useState, useEffect } from "react"
 import { Plus, Database, Edit3, Eye, Sparkles, FileText } from "lucide-react"
 import { getLlamaResponse } from "../lib/llamaApi"
 import { getRelationalLlamaResponse } from "../lib/relationalLlama"
+import { parseSqlSchema } from "../lib/sqlParser"
 import JsonTreeView from "@/components/JsonTreeView"
+import AddRowModal from "@/components/AddRowModal"
 
 type Schema = {
   formId: string;
@@ -31,6 +33,10 @@ export default function NoCodeDatabase() {
   const [databasesText, setDatabasesText] = useState("");
   const [relationalSchema, setRelationalSchema] = useState<string | object | null>(null)
   const [isGeneratingRelational, setIsGeneratingRelational] = useState(false)
+  const [parsedRelationalSchema, setParsedRelationalSchema] = useState<any[] | null>(null);
+  const [nonRelationalSchemas, setNonRelationalSchemas] = useState<object[] | null>(null)
+  const [isLoadingNonRelational, setIsLoadingNonRelational] = useState(false)
+  const [selectedTable, setSelectedTable] = useState<any | null>(null);
 
   // Clear message after 5 seconds
   useEffect(() => {
@@ -46,6 +52,7 @@ export default function NoCodeDatabase() {
   // Handle creating new database structure
   const handleCreateDatabase = async () => {
     setRelationalSchema(null); // Clear relational schema
+    setParsedRelationalSchema(null); // Also clear the parsed relational schema
     if (!naturalLanguageInput.trim()) {
       setMessage("Please describe what kind of data you want to store.")
       setMessageType("error")
@@ -57,31 +64,55 @@ export default function NoCodeDatabase() {
       const generatedSchema = await getLlamaResponse(naturalLanguageInput);
       console.log("2. LLM Response:", generatedSchema);
       
+      // Try to extract JSON from code block first
+      let rawJson = null;
       const codeBlockMatch = generatedSchema.match(/```json\s*([\s\S]+?)```/i);
-      console.log("3. Code block match:", codeBlockMatch);
-      const rawJson = codeBlockMatch ? codeBlockMatch[1].trim() : null;
-    
-      if (!rawJson) {
-        throw new Error("No JSON code block found");
+      if (codeBlockMatch) {
+        rawJson = codeBlockMatch[1].trim();
+      } else {
+        // If not a code block, try to parse as JSON or double-encoded JSON
+        let tryContent = generatedSchema.trim();
+        // Remove wrapping quotes if present
+        if ((tryContent.startsWith('"') && tryContent.endsWith('"')) || (tryContent.startsWith("'") && tryContent.endsWith("'"))) {
+          tryContent = tryContent.slice(1, -1);
+        }
+        // Unescape if it looks like double-encoded JSON
+        try {
+          rawJson = JSON.parse(tryContent);
+        } catch (e) {
+          rawJson = tryContent;
+        }
       }
-    
-      console.log("4. Raw JSON:", rawJson);
-      const jsonObject = JSON.parse(rawJson);
+      
+      // At this point, rawJson should be a JSON string or object/array
+      let jsonObject;
+      if (typeof rawJson === 'string') {
+        try {
+          // Try parsing as a single object or array
+          jsonObject = JSON.parse(rawJson);
+        } catch (e) {
+          // Fallback: try to parse multiple objects separated by newlines
+          const possibleObjects = rawJson
+            .split(/\n(?=\s*\{)/) // split at newlines before a {
+            .map(s => s.trim())
+            .filter(Boolean);
+          if (possibleObjects.length > 1) {
+            try {
+              jsonObject = possibleObjects.map(objStr => JSON.parse(objStr));
+            } catch (e2) {
+              throw new Error('Unable to parse multiple JSON objects');
+            }
+          } else {
+            throw e; // rethrow original error
+          }
+        }
+      } else {
+        jsonObject = rawJson;
+      }
       console.log("5. Parsed JSON Object:", jsonObject);
       setSchemaObject(jsonObject)
       setMessage("Your database structure has been created successfully. You can now edit it below.")
       setMessageType("success");
-    
-      const apiResponse = await fetch('http://localhost:4441/no-code-db-api/form/schema', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(jsonObject), 
-      });
-
-      if (!apiResponse.ok) {
-        throw new Error('Failed to save schema to database');
-      }
-     
     } catch (error) {
       console.error("Error details:", error);
       setMessage("Something went wrong. Please try describing your data differently.")
@@ -179,6 +210,7 @@ export default function NoCodeDatabase() {
 
   const handleGenerateRelationalDatabase = async () => {
     setSchemaObject(null); // Clear NoSQL schema
+    setParsedRelationalSchema(null); // Clear previous parsed schema
     if (!naturalLanguageInput.trim()) {
       setMessage("Please describe what kind of data you want to store.")
       setMessageType("error")
@@ -187,13 +219,23 @@ export default function NoCodeDatabase() {
     setIsGeneratingRelational(true)
     try {
       const result = await getRelationalLlamaResponse(naturalLanguageInput)
-      // Extract SQL code block if present
-      let sqlOnly = result
-      const codeBlockMatch = result.match(/```sql\s*([\s\S]+?)```/i)
+      console.log("Raw SQL from Llama API:", result); 
+      setRelationalSchema(result); // Store the full response as a fallback
+
+      // First, extract only the SQL code from the response.
+      let sqlOnly = '';
+      const codeBlockMatch = result.match(/```sql\\s*([\\s\\S]+?)```/i);
       if (codeBlockMatch) {
-        sqlOnly = codeBlockMatch[1].trim()
+        sqlOnly = codeBlockMatch[1].trim();
+      } else {
+        // If no code block is found, assume the whole result might be SQL
+        sqlOnly = result;
       }
-      setRelationalSchema(sqlOnly)
+
+      // Now, parse only the extracted SQL.
+      const parsedSchema = parseSqlSchema(sqlOnly);
+      setParsedRelationalSchema(parsedSchema);
+
       setMessage("Your relational database schema has been generated below.")
       setMessageType("success")
     } catch (error) {
@@ -477,14 +519,31 @@ export default function NoCodeDatabase() {
           </div>
 
           <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl p-8 border border-slate-200/50">
-            {relationalSchema ? (
-              typeof relationalSchema === 'string' ? (
-                <pre className="bg-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap">{relationalSchema}</pre>
-              ) : (
-                <JsonTreeView data={relationalSchema} onUpdate={handleSchemaUpdate} rootName="form" />
-              )
+            {parsedRelationalSchema && parsedRelationalSchema.length > 0 ? (
+                <div className="space-y-4">
+                  {parsedRelationalSchema.map((table, index) => (
+                    <div key={index} className="bg-white/60 p-4 rounded-lg border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-lg font-semibold text-slate-800 font-mono">{table.tableName}</h4>
+                        <button
+                          className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors"
+                          onClick={() => setSelectedTable(table)}
+                        >
+                          <Plus className="w-4 h-4" /> Add Row
+                        </button>
+                      </div>
+                      <div className="mt-3 text-xs text-slate-500 font-mono bg-slate-100 p-2 rounded">
+                        Columns: {table.columns.map((col: { name: string }) => col.name).join(', ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+            ) : relationalSchema && typeof relationalSchema === 'string' ? (
+              <pre className="bg-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap">{relationalSchema}</pre>
             ) : schemaObject ? (
               <JsonTreeView data={schemaObject} onUpdate={handleSchemaUpdate} rootName="form" />
+            ) : nonRelationalSchemas ? (
+              <JsonTreeView data={nonRelationalSchemas} onUpdate={handleSchemaUpdate} rootName="form" />
             ) : (
               <div className="text-center py-20">
                 <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -500,6 +559,11 @@ export default function NoCodeDatabase() {
           </div>
         </section>
       </main>
+      <AddRowModal
+        table={selectedTable}
+        open={!!selectedTable}
+        onClose={() => setSelectedTable(null)}
+      />
     </div>
   )
 }

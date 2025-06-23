@@ -147,12 +147,31 @@ const AddDocumentModal = ({ schema, open, onClose }: { schema: any, open: boolea
     setIsSubmitting(true);
     try {
       // Optionally validate required fields here
+      const payload = { formId: schema.formId, fields: formData };
+      console.log('POSTing document to /no-code-db-api/form/data:', payload);
       const response = await fetch('http://localhost:4441/no-code-db-api/form/data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ formId: schema.formId, data: formData })
+        body: JSON.stringify(payload)
       });
-      if (!response.ok) throw new Error('Failed to add document');
+      if (!response.ok) {
+        let errorMsg = 'Failed to add document';
+        try {
+          const errorData = await response.json();
+          if (errorData && errorData.message) {
+            errorMsg = errorData.message;
+          } else if (typeof errorData === 'string') {
+            errorMsg = errorData;
+          }
+        } catch (err) {
+          // If not JSON, try text
+          try {
+            const errorText = await response.text();
+            if (errorText) errorMsg = errorText;
+          } catch {}
+        }
+        throw new Error(errorMsg);
+      }
       onClose(true);
     } catch (err: any) {
       setError(err.message || 'Unknown error');
@@ -194,6 +213,8 @@ const AddDocumentModal = ({ schema, open, onClose }: { schema: any, open: boolea
 const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps) => {
   const [modalSchema, setModalSchema] = useState<any>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
   const handleUpdate = (path: (string | number)[], newValue: any) => {
     // Create a deep copy to avoid direct state mutation
     const newData = JSON.parse(JSON.stringify(data))
@@ -212,16 +233,68 @@ const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps
   // Helper: get all schemas (array or single)
   const schemas = Array.isArray(data) ? data : [data];
 
+  // Confirm schema handler
+  const handleConfirmSchema = async (schema: any) => {
+    setConfirming(schema.formId || (Array.isArray(schema) ? 'multiple' : 'unknown'));
+    setConfirmMessage(null);
+    try {
+      if (Array.isArray(schema)) {
+        // If schema is an array, POST each one individually
+        for (const singleSchema of schema) {
+          console.log("Sending schema:", singleSchema);
+          const response = await fetch('http://localhost:4441/no-code-db-api/form/schema', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(singleSchema)
+          });
+          if (!response.ok) throw new Error('Failed to confirm one of the schemas');
+        }
+        setConfirmMessage('All schemas confirmed and saved!');
+      } else {
+        console.log("Sending schema:", schema);
+        const response = await fetch('http://localhost:4441/no-code-db-api/form/schema', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(schema)
+        });
+        if (!response.ok) throw new Error('Failed to confirm schema');
+        setConfirmMessage('Schema confirmed and saved!');
+      }
+    } catch (err: any) {
+      setConfirmMessage('Error: ' + (err.message || 'Unknown error'));
+    } finally {
+      setConfirming(null);
+    }
+  };
+
+  // Helper: open Add Document modal with fields as array
+  const openAddDocumentModal = (schema: any) => {
+    let schemaForModal = { ...schema };
+    if (schemaForModal.fields && !Array.isArray(schemaForModal.fields)) {
+      schemaForModal.fields = Object.values(schemaForModal.fields);
+    }
+    setModalSchema(schemaForModal);
+    setModalOpen(true);
+  };
+
   return (
     <div className="p-4 bg-white rounded-lg border border-gray-200">
       {schemas.map((schema, idx) => (
         <div key={schema.formId || idx} className="mb-8">
           <div className="flex items-center mb-2">
-            <span className="font-bold text-lg mr-2">{schema.name || rootName}</span>
-            <button className="ml-auto flex items-center gap-1 bg-emerald-600 text-white px-3 py-1 rounded hover:bg-emerald-700" onClick={() => { setModalSchema(schema); setModalOpen(true); }}>
+            <span className="font-bold text-lg mr-2">{schema.formId || rootName}</span>
+            <button className="ml-auto flex items-center gap-1 bg-emerald-600 text-white px-3 py-1 rounded hover:bg-emerald-700" onClick={() => openAddDocumentModal(schema)}>
               <Plus className="w-4 h-4" /> Add Document
             </button>
+            <button
+              className="ml-2 flex items-center gap-1 bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+              onClick={() => handleConfirmSchema(schema)}
+              disabled={confirming === (schema.formId || "unknown")}
+            >
+              {confirming === (schema.formId || "unknown") ? 'Confirming...' : 'Confirm Schema'}
+            </button>
           </div>
+          {confirmMessage && <div className="text-sm text-blue-700 mb-2">{confirmMessage}</div>}
           <JsonNode name={rootName} value={schema} path={[]} onUpdate={handleUpdate} isRoot />
         </div>
       ))}

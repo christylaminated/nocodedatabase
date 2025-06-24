@@ -16,7 +16,6 @@ type JsonNodeProps = {
   onUpdate: (path: (string | number)[], value: any) => void
   isRoot?: boolean
 }
-
 const JsonNode = ({ name, value, path, onUpdate, isRoot = false }: JsonNodeProps) => {
   const [isOpen, setIsOpen] = useState(isRoot)
   const [isEditing, setIsEditing] = useState(false)
@@ -146,8 +145,21 @@ const AddDocumentModal = ({ schema, open, onClose }: { schema: any, open: boolea
     setError(null);
     setIsSubmitting(true);
     try {
-      // Optionally validate required fields here
-      const payload = { formId: schema.formId, fields: formData };
+      // Only include fields defined in the schema
+      let allowedFieldKeys: string[] = [];
+      if (Array.isArray(schema.fields)) {
+        allowedFieldKeys = schema.fields.map((f: any) => f.fieldId);
+      } else if (typeof schema.fields === 'object' && schema.fields !== null) {
+        allowedFieldKeys = Object.keys(schema.fields);
+      }
+      const filteredFields: Record<string, any> = {};
+      for (const key of allowedFieldKeys) {
+        if (formData.hasOwnProperty(key)) {
+          filteredFields[key] = formData[key];
+        }
+      }
+      const payload = { formId: schema.formId, fields: filteredFields };
+      console.log('COPY/PASTE TO POSTMAN:', JSON.stringify(payload, null, 2));
       console.log('POSTing document to /no-code-db-api/form/data:', payload);
       const response = await fetch('http://localhost:4441/no-code-db-api/form/data', {
         method: 'POST',
@@ -214,7 +226,7 @@ const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps
   const [modalSchema, setModalSchema] = useState<any>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
+  const [confirmMessages, setConfirmMessages] = useState<{ [formId: string]: string | null }>({});
   const handleUpdate = (path: (string | number)[], newValue: any) => {
     // Create a deep copy to avoid direct state mutation
     const newData = JSON.parse(JSON.stringify(data))
@@ -236,7 +248,7 @@ const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps
   // Confirm schema handler
   const handleConfirmSchema = async (schema: any) => {
     setConfirming(schema.formId || (Array.isArray(schema) ? 'multiple' : 'unknown'));
-    setConfirmMessage(null);
+    setConfirmMessages((prev) => ({ ...prev, [schema.formId]: null }));
     try {
       if (Array.isArray(schema)) {
         // If schema is an array, POST each one individually
@@ -249,7 +261,7 @@ const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps
           });
           if (!response.ok) throw new Error('Failed to confirm one of the schemas');
         }
-        setConfirmMessage('All schemas confirmed and saved!');
+        setConfirmMessages((prev) => ({ ...prev, all: 'All schemas confirmed and saved!' }));
       } else {
         console.log("Sending schema:", schema);
         const response = await fetch('http://localhost:4441/no-code-db-api/form/schema', {
@@ -258,10 +270,10 @@ const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps
           body: JSON.stringify(schema)
         });
         if (!response.ok) throw new Error('Failed to confirm schema');
-        setConfirmMessage('Schema confirmed and saved!');
+        setConfirmMessages((prev) => ({ ...prev, [schema.formId]: 'Schema confirmed and saved!' }));
       }
     } catch (err: any) {
-      setConfirmMessage('Error: ' + (err.message || 'Unknown error'));
+      setConfirmMessages((prev) => ({ ...prev, [schema.formId]: 'Error: ' + (err.message || 'Unknown error') }));
     } finally {
       setConfirming(null);
     }
@@ -294,7 +306,9 @@ const JsonTreeView = ({ data, onUpdate, rootName = "schema" }: JsonTreeViewProps
               {confirming === (schema.formId || "unknown") ? 'Confirming...' : 'Confirm Schema'}
             </button>
           </div>
-          {confirmMessage && <div className="text-sm text-blue-700 mb-2">{confirmMessage}</div>}
+          {confirmMessages[schema.formId] && (
+            <div className="text-sm text-blue-700 mb-2">{confirmMessages[schema.formId]}</div>
+          )}
           <JsonNode name={rootName} value={schema} path={[]} onUpdate={handleUpdate} isRoot />
         </div>
       ))}

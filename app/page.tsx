@@ -246,6 +246,59 @@ export default function NoCodeDatabase() {
     }
   }
 
+  // Handler to load all relational database schemas and show as tables
+  const handleLoadAllRelationalDatabases = async () => {
+    setIsLoadingDatabases(true);
+    try {
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      const schemasData = await response.json();
+      // If schemasData is an array of SQL strings, parse each; if it's objects, adapt as needed
+      // If your backend returns SQL, use parseSqlSchema; otherwise, adapt this logic
+      let parsed = [];
+      if (Array.isArray(schemasData)) {
+        // If schemasData is an array of objects with a .sql property
+        if (schemasData.length > 0 && typeof schemasData[0] === 'object' && schemasData[0].sql) {
+          parsed = schemasData.map((schema: any) => parseSqlSchema(schema.sql)).flat();
+        } else if (schemasData.length > 0 && typeof schemasData[0] === 'string') {
+          // If schemasData is an array of SQL strings
+          parsed = schemasData.map((sql: string) => parseSqlSchema(sql)).flat();
+        } else {
+          // If schemasData is already in table format
+          parsed = schemasData;
+        }
+      }
+      setParsedRelationalSchema(parsed);
+      setRelationalSchema(null); // Hide raw SQL if showing all
+      setMessage("Relational database schemas loaded successfully!");
+      setMessageType("success");
+    } catch (error) {
+      setMessage("Could not load relational databases. Please try again.");
+      setMessageType("error");
+    } finally {
+      setIsLoadingDatabases(false);
+    }
+  };
+
+  // Handler to load all non-relational (NoSQL) database schemas
+  const handleLoadAllNonRelationalDatabases = async () => {
+    setIsLoadingNonRelational(true);
+    try {
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      const schemasData = await response.json();
+      setNonRelationalSchemas(schemasData);
+      setSchemaObject(null); // Hide single schema view
+      setRelationalSchema(null); // Hide relational view
+      setParsedRelationalSchema(null);
+      setMessage("Non-relational database schemas loaded successfully!");
+      setMessageType("success");
+    } catch (error) {
+      setMessage("Could not load non-relational databases. Please try again.");
+      setMessageType("error");
+    } finally {
+      setIsLoadingNonRelational(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans">
       {/* Subtle Background Elements */}
@@ -436,7 +489,8 @@ export default function NoCodeDatabase() {
               </button>
               <button
                 className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-5 rounded-2xl font-medium text-lg hover:bg-blue-600 hover:text-white hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-4"
-                onClick={() => setMessage('Non-relational database loading coming soon!')}
+                onClick={handleLoadAllNonRelationalDatabases}
+                disabled={isLoadingNonRelational}
               >
                 <Database className="w-6 h-6" />
                 <span>Load All Non Relational Databases</span>
@@ -519,8 +573,10 @@ export default function NoCodeDatabase() {
           </div>
 
           <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl p-8 border border-slate-200/50">
-            {parsedRelationalSchema && parsedRelationalSchema.length > 0 ? (
-                <div className="space-y-4">
+            {/* Relational Generation: Show tables and SQL side by side */}
+            {parsedRelationalSchema && parsedRelationalSchema.length > 0 && relationalSchema ? (
+              <div className="flex flex-col md:flex-row gap-8">
+                <div className="flex-1 space-y-4">
                   {parsedRelationalSchema.map((table, index) => (
                     <div key={index} className="bg-white/60 p-4 rounded-lg border border-slate-200 shadow-sm">
                       <div className="flex items-center justify-between">
@@ -538,8 +594,30 @@ export default function NoCodeDatabase() {
                     </div>
                   ))}
                 </div>
-            ) : relationalSchema && typeof relationalSchema === 'string' ? (
-              <pre className="bg-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap">{relationalSchema}</pre>
+                <div className="md:w-1/2 w-full">
+                  <h4 className="text-base font-semibold mb-2 text-slate-700">Generated SQL</h4>
+                  <pre className="bg-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap text-xs">{typeof relationalSchema === 'string' ? relationalSchema : JSON.stringify(relationalSchema, null, 2)}</pre>
+                </div>
+              </div>
+            ) : parsedRelationalSchema && parsedRelationalSchema.length > 0 ? (
+              <div className="space-y-4">
+                {parsedRelationalSchema.map((table, index) => (
+                  <div key={index} className="bg-white/60 p-4 rounded-lg border border-slate-200 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-lg font-semibold text-slate-800 font-mono">{table.tableName}</h4>
+                      <button
+                        className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors"
+                        onClick={() => setSelectedTable(table)}
+                      >
+                        <Plus className="w-4 h-4" /> Add Row
+                      </button>
+                    </div>
+                    <div className="mt-3 text-xs text-slate-500 font-mono bg-slate-100 p-2 rounded">
+                      Columns: {table.columns.map((col: { name: string }) => col.name).join(', ')}
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : schemaObject ? (
               <JsonTreeView data={schemaObject} onUpdate={handleSchemaUpdate} rootName="form" />
             ) : nonRelationalSchemas ? (

@@ -37,6 +37,7 @@ export default function NoCodeDatabase() {
   const [nonRelationalSchemas, setNonRelationalSchemas] = useState<object[] | null>(null)
   const [isLoadingNonRelational, setIsLoadingNonRelational] = useState(false)
   const [selectedTable, setSelectedTable] = useState<any | null>(null);
+  const [schemaExplanation, setSchemaExplanation] = useState<string>("");
 
   // Clear message after 5 seconds
   useEffect(() => {
@@ -63,54 +64,66 @@ export default function NoCodeDatabase() {
       console.log("1. Calling LLM with:", naturalLanguageInput);
       const generatedSchema = await getLlamaResponse(naturalLanguageInput);
       console.log("2. LLM Response:", generatedSchema);
-      
-      // Try to extract JSON from code block first
+      // --- Robust JSON extraction and parsing ---
+      // Extract JSON code block from LLM response
+      const codeBlockMatch = generatedSchema.match(/```json\s*([\s\S]+?)```/i) || generatedSchema.match(/```\s*([\s\S]+?)```/i);
       let rawJson = null;
-      const codeBlockMatch = generatedSchema.match(/```json\s*([\s\S]+?)```/i);
+      let explanation = "";
       if (codeBlockMatch) {
         rawJson = codeBlockMatch[1].trim();
-      } else {
-        // If not a code block, try to parse as JSON or double-encoded JSON
-        let tryContent = generatedSchema.trim();
-        // Remove wrapping quotes if present
-        if ((tryContent.startsWith('"') && tryContent.endsWith('"')) || (tryContent.startsWith("'") && tryContent.endsWith("'"))) {
-          tryContent = tryContent.slice(1, -1);
+        // Explanation is everything after the closing code block
+        const afterCodeBlock = generatedSchema.split(codeBlockMatch[0])[1];
+        if (afterCodeBlock) {
+          explanation = afterCodeBlock.trim();
         }
-        // Unescape if it looks like double-encoded JSON
-        try {
-          rawJson = JSON.parse(tryContent);
-        } catch (e) {
-          rawJson = tryContent;
+      } else {
+        // fallback: try to find the first { ... }
+        const firstBrace = generatedSchema.indexOf('{');
+        const lastBrace = generatedSchema.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          rawJson = generatedSchema.substring(firstBrace, lastBrace + 1);
+          explanation = generatedSchema.substring(lastBrace + 1).trim();
+        } else {
+          setMessage("Could not find JSON in the response. Please try again.");
+          setMessageType("error");
+          setIsGenerating(false);
+          return;
         }
       }
-      
-      // At this point, rawJson should be a JSON string or object/array
+      // Remove wrapping quotes if present
+      if ((rawJson.startsWith('"') && rawJson.endsWith('"')) || (rawJson.startsWith("'") && rawJson.endsWith("'"))) {
+        rawJson = rawJson.slice(1, -1);
+      }
+      // Replace escaped quotes with real quotes if it looks like escaped JSON
+      if (rawJson.includes('\\"')) {
+        rawJson = rawJson.replace(/\\"/g, '"');
+      }
+      // Remove any leading/trailing newlines or whitespace
+      rawJson = rawJson.trim();
+      // Try parsing as JSON
       let jsonObject;
-      if (typeof rawJson === 'string') {
-        try {
-          // Try parsing as a single object or array
-          jsonObject = JSON.parse(rawJson);
-        } catch (e) {
-          // Fallback: try to parse multiple objects separated by newlines
-          const possibleObjects = rawJson
-            .split(/\n(?=\s*\{)/) // split at newlines before a {
-            .map(s => s.trim())
-            .filter(Boolean);
-          if (possibleObjects.length > 1) {
-            try {
-              jsonObject = possibleObjects.map(objStr => JSON.parse(objStr));
-            } catch (e2) {
-              throw new Error('Unable to parse multiple JSON objects');
-            }
-          } else {
-            throw e; // rethrow original error
-          }
+      try {
+        jsonObject = JSON.parse(rawJson);
+      } catch (e) {
+        // Fallback: try to parse multiple objects separated by newlines
+        const possibleObjects = rawJson
+          .split(/\n(?=\s*\{)/)
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+        if (possibleObjects.length > 1) {
+          setMessage("Unable to parse multiple JSON objects. Please provide a single valid JSON object.");
+          setMessageType("error");
+          setIsGenerating(false);
+          return;
+        } else {
+          setMessage("Unable to parse JSON. Please make sure your input is valid JSON.");
+          setMessageType("error");
+          setIsGenerating(false);
+          return;
         }
-      } else {
-        jsonObject = rawJson;
       }
-      console.log("5. Parsed JSON Object:", jsonObject);
-      setSchemaObject(jsonObject)
+      setSchemaObject(jsonObject);
+      setSchemaExplanation(explanation);
       setMessage("Your database structure has been created successfully. You can now edit it below.")
       setMessageType("success");
     } catch (error) {
@@ -619,7 +632,15 @@ export default function NoCodeDatabase() {
                 ))}
               </div>
             ) : schemaObject ? (
-              <JsonTreeView data={schemaObject} onUpdate={handleSchemaUpdate} rootName="form" />
+              <div>
+                {schemaExplanation && (
+                  <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <h4 className="text-base font-semibold mb-2 text-blue-800">Explanation</h4>
+                    <div className="prose prose-blue max-w-none" dangerouslySetInnerHTML={{ __html: schemaExplanation.replace(/\n/g, '<br/>') }} />
+                  </div>
+                )}
+                <JsonTreeView data={schemaObject} onUpdate={handleSchemaUpdate} rootName="form" />
+              </div>
             ) : nonRelationalSchemas ? (
               <JsonTreeView data={nonRelationalSchemas} onUpdate={handleSchemaUpdate} rootName="form" />
             ) : (

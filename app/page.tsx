@@ -7,6 +7,8 @@ import { getRelationalLlamaResponse } from "../lib/relationalLlama"
 import { parseSqlSchema } from "../lib/sqlParser"
 import JsonTreeView from "@/components/JsonTreeView"
 import AddRowModal from "@/components/AddRowModal"
+import { getLlamaExplanation } from "../lib/llamaExplain"
+import { marked } from "marked"
 
 type Schema = {
   formId: string;
@@ -38,6 +40,15 @@ export default function NoCodeDatabase() {
   const [isLoadingNonRelational, setIsLoadingNonRelational] = useState(false)
   const [selectedTable, setSelectedTable] = useState<any | null>(null);
   const [schemaExplanation, setSchemaExplanation] = useState<string>("");
+  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
+  const [followUpQuestion, setFollowUpQuestion] = useState("");
+  const [followUpAnswer, setFollowUpAnswer] = useState("");
+  const [isLoadingFollowUp, setIsLoadingFollowUp] = useState(false);
+  const [relationalExplanation, setRelationalExplanation] = useState("");
+  const [isLoadingRelationalExplanation, setIsLoadingRelationalExplanation] = useState(false);
+  const [relationalFollowUpQuestion, setRelationalFollowUpQuestion] = useState("");
+  const [relationalFollowUpAnswer, setRelationalFollowUpAnswer] = useState("");
+  const [isLoadingRelationalFollowUp, setIsLoadingRelationalFollowUp] = useState(false);
 
   // Clear message after 5 seconds
   useEffect(() => {
@@ -64,66 +75,38 @@ export default function NoCodeDatabase() {
       console.log("1. Calling LLM with:", naturalLanguageInput);
       const generatedSchema = await getLlamaResponse(naturalLanguageInput);
       console.log("2. LLM Response:", generatedSchema);
-      // --- Robust JSON extraction and parsing ---
-      // Extract JSON code block from LLM response
-      const codeBlockMatch = generatedSchema.match(/```json\s*([\s\S]+?)```/i) || generatedSchema.match(/```\s*([\s\S]+?)```/i);
-      let rawJson = null;
-      let explanation = "";
-      if (codeBlockMatch) {
-        rawJson = codeBlockMatch[1].trim();
-        // Explanation is everything after the closing code block
-        const afterCodeBlock = generatedSchema.split(codeBlockMatch[0])[1];
-        if (afterCodeBlock) {
-          explanation = afterCodeBlock.trim();
+      // Extract all JSON code blocks (for multiple schemas)
+      const codeBlocks = [...generatedSchema.matchAll(/```json\s*([\s\S]+?)```/gi)];
+      let schemas = [];
+      if (codeBlocks.length > 0) {
+        for (const match of codeBlocks) {
+          let block = match[1].trim();
+          // If block contains multiple objects, split them
+          const objects = block
+            .split(/(?<=\})\s*(?=\{)/g) // split at boundaries between } and {
+            .map((s: string) => s.trim())
+            .filter(Boolean);
+          for (const objStr of objects) {
+            try {
+              schemas.push(JSON.parse(objStr));
+            } catch (e) {
+              // Optionally handle parse errors
+            }
+          }
         }
       } else {
-        // fallback: try to find the first { ... }
-        const firstBrace = generatedSchema.indexOf('{');
-        const lastBrace = generatedSchema.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-          rawJson = generatedSchema.substring(firstBrace, lastBrace + 1);
-          explanation = generatedSchema.substring(lastBrace + 1).trim();
-        } else {
-          setMessage("Could not find JSON in the response. Please try again.");
-          setMessageType("error");
-          setIsGenerating(false);
-          return;
-        }
-      }
-      // Remove wrapping quotes if present
-      if ((rawJson.startsWith('"') && rawJson.endsWith('"')) || (rawJson.startsWith("'") && rawJson.endsWith("'"))) {
-        rawJson = rawJson.slice(1, -1);
-      }
-      // Replace escaped quotes with real quotes if it looks like escaped JSON
-      if (rawJson.includes('\\"')) {
-        rawJson = rawJson.replace(/\\"/g, '"');
-      }
-      // Remove any leading/trailing newlines or whitespace
-      rawJson = rawJson.trim();
-      // Try parsing as JSON
-      let jsonObject;
-      try {
-        jsonObject = JSON.parse(rawJson);
-      } catch (e) {
-        // Fallback: try to parse multiple objects separated by newlines
-        const possibleObjects = rawJson
-          .split(/\n(?=\s*\{)/)
-          .map((s: string) => s.trim())
-          .filter(Boolean);
-        if (possibleObjects.length > 1) {
-          setMessage("Unable to parse multiple JSON objects. Please provide a single valid JSON object.");
-          setMessageType("error");
-          setIsGenerating(false);
-          return;
-        } else {
+        // Fallback: try to parse as a single JSON object
+        try {
+          schemas.push(JSON.parse(generatedSchema.trim()));
+        } catch (e) {
           setMessage("Unable to parse JSON. Please make sure your input is valid JSON.");
           setMessageType("error");
           setIsGenerating(false);
           return;
         }
       }
-      setSchemaObject(jsonObject);
-      setSchemaExplanation(explanation);
+      setSchemaObject(schemas.length === 1 ? schemas[0] : schemas);
+      setSchemaExplanation(""); // Clear previous explanation
       setMessage("Your database structure has been created successfully. You can now edit it below.")
       setMessageType("success");
     } catch (error) {
@@ -309,6 +292,71 @@ export default function NoCodeDatabase() {
       setMessageType("error");
     } finally {
       setIsLoadingNonRelational(false);
+    }
+  };
+
+  // Handler for explanation button
+  const handleExplainSchema = async () => {
+    if (!schemaObject) return;
+    setIsLoadingExplanation(true);
+    try {
+      const explanation = await getLlamaExplanation(schemaObject, naturalLanguageInput);
+      setSchemaExplanation(explanation);
+    } catch (explainError) {
+      setSchemaExplanation("Could not generate explanation.");
+    } finally {
+      setIsLoadingExplanation(false);
+    }
+  };
+
+  // Handler for follow-up question
+  const handleFollowUp = async () => {
+    if (!schemaObject || !followUpQuestion.trim()) return;
+    setIsLoadingFollowUp(true);
+    setFollowUpAnswer("");
+    try {
+      // Custom prompt for follow-up
+      const prompt = `Given this schema: ${JSON.stringify(schemaObject, null, 2)} and this user request: "${naturalLanguageInput}", answer this follow up question: "${followUpQuestion}"`;
+      // Reuse getLlamaExplanation for the follow-up
+      const answer = await getLlamaExplanation(schemaObject, prompt);
+      setFollowUpAnswer(answer);
+    } catch (err) {
+      setFollowUpAnswer("Could not get an answer to your follow up question.");
+    } finally {
+      setIsLoadingFollowUp(false);
+    }
+  };
+
+  // Handler for relational explanation
+  const handleExplainRelationalSchema = async () => {
+    if (!relationalSchema) return;
+    setIsLoadingRelationalExplanation(true);
+    setRelationalExplanation("");
+    try {
+      // Use the SQL schema as the context
+      const prompt = `Explain the following PostgreSQL schema in the context of this user request: "${naturalLanguageInput}"\n\nSchema:\n${typeof relationalSchema === "string" ? relationalSchema : JSON.stringify(relationalSchema, null, 2)}`;
+      const explanation = await getLlamaExplanation(relationalSchema, prompt);
+      setRelationalExplanation(explanation);
+    } catch (err) {
+      setRelationalExplanation("Could not generate explanation.");
+    } finally {
+      setIsLoadingRelationalExplanation(false);
+    }
+  };
+
+  // Handler for relational follow-up question
+  const handleRelationalFollowUp = async () => {
+    if (!relationalSchema || !relationalFollowUpQuestion.trim()) return;
+    setIsLoadingRelationalFollowUp(true);
+    setRelationalFollowUpAnswer("");
+    try {
+      const prompt = `Given this PostgreSQL schema: ${typeof relationalSchema === "string" ? relationalSchema : JSON.stringify(relationalSchema, null, 2)} and this user request: "${naturalLanguageInput}", answer this follow up question: "${relationalFollowUpQuestion}"`;
+      const answer = await getLlamaExplanation(relationalSchema, prompt);
+      setRelationalFollowUpAnswer(answer);
+    } catch (err) {
+      setRelationalFollowUpAnswer("Could not get an answer to your follow up question.");
+    } finally {
+      setIsLoadingRelationalFollowUp(false);
     }
   };
 
@@ -610,6 +658,47 @@ export default function NoCodeDatabase() {
                 <div className="md:w-1/2 w-full">
                   <h4 className="text-base font-semibold mb-2 text-slate-700">Generated SQL</h4>
                   <pre className="bg-gray-100 p-4 rounded-lg overflow-auto whitespace-pre-wrap text-xs">{typeof relationalSchema === 'string' ? relationalSchema : JSON.stringify(relationalSchema, null, 2)}</pre>
+                  {/* Relational Explain Button and Explanation */}
+                  <button
+                    className="mt-4 mb-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                    onClick={handleExplainRelationalSchema}
+                    disabled={isLoadingRelationalExplanation}
+                  >
+                    {isLoadingRelationalExplanation ? 'Generating Explanation...' : 'Explain this Schema'}
+                  </button>
+                  {relationalExplanation && (
+                    <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <h4 className="text-base font-semibold mb-2 text-blue-800">Explanation</h4>
+                      <div
+                        className="prose prose-blue max-w-none"
+                        dangerouslySetInnerHTML={{ __html: marked.parse(relationalExplanation || "") }}
+                      />
+                      {/* Relational Follow-up question UI */}
+                      <div className="mt-6">
+                        <label className="block text-sm font-medium text-blue-800 mb-2">Ask a follow up question</label>
+                        <div className="flex gap-2 mb-2">
+                          <input
+                            type="text"
+                            className="flex-1 px-3 py-2 border border-blue-200 rounded"
+                            value={relationalFollowUpQuestion}
+                            onChange={e => setRelationalFollowUpQuestion(e.target.value)}
+                            placeholder="E.g. Can I add more tables?"
+                            disabled={isLoadingRelationalFollowUp}
+                          />
+                          <button
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                            onClick={handleRelationalFollowUp}
+                            disabled={!relationalFollowUpQuestion.trim() || isLoadingRelationalFollowUp}
+                          >
+                            {isLoadingRelationalFollowUp ? 'Asking...' : 'Ask'}
+                          </button>
+                        </div>
+                        {relationalFollowUpAnswer && (
+                          <div className="mt-2 p-3 bg-blue-100 border border-blue-200 rounded prose prose-blue" dangerouslySetInnerHTML={{ __html: marked.parse(relationalFollowUpAnswer) }} />
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : parsedRelationalSchema && parsedRelationalSchema.length > 0 ? (
@@ -633,10 +722,44 @@ export default function NoCodeDatabase() {
               </div>
             ) : schemaObject ? (
               <div>
+                <button
+                  className="mb-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={handleExplainSchema}
+                  disabled={!schemaObject || isLoadingExplanation}
+                >
+                  {isLoadingExplanation ? 'Generating Explanation...' : 'Explain this Schema'}
+                </button>
                 {schemaExplanation && (
                   <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
                     <h4 className="text-base font-semibold mb-2 text-blue-800">Explanation</h4>
-                    <div className="prose prose-blue max-w-none" dangerouslySetInnerHTML={{ __html: schemaExplanation.replace(/\n/g, '<br/>') }} />
+                    <div
+                      className="prose prose-blue max-w-none"
+                      dangerouslySetInnerHTML={{ __html: marked.parse(schemaExplanation || "") }}
+                    />
+                    {/* Follow-up question UI */}
+                    <div className="mt-6">
+                      <label className="block text-sm font-medium text-blue-800 mb-2">Ask a follow up question</label>
+                      <div className="flex gap-2 mb-2">
+                        <input
+                          type="text"
+                          className="flex-1 px-3 py-2 border border-blue-200 rounded"
+                          value={followUpQuestion}
+                          onChange={e => setFollowUpQuestion(e.target.value)}
+                          placeholder="E.g. Can I add more fields?"
+                          disabled={isLoadingFollowUp}
+                        />
+                        <button
+                          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                          onClick={handleFollowUp}
+                          disabled={!followUpQuestion.trim() || isLoadingFollowUp}
+                        >
+                          {isLoadingFollowUp ? 'Asking...' : 'Ask'}
+                        </button>
+                      </div>
+                      {followUpAnswer && (
+                        <div className="mt-2 p-3 bg-blue-100 border border-blue-200 rounded prose prose-blue" dangerouslySetInnerHTML={{ __html: marked.parse(followUpAnswer) }} />
+                      )}
+                    </div>
                   </div>
                 )}
                 <JsonTreeView data={schemaObject} onUpdate={handleSchemaUpdate} rootName="form" />

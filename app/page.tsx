@@ -61,6 +61,27 @@ export default function NoCodeDatabase() {
     }
   }, [message])
 
+  // Stack-based parser to extract all top-level JSON objects from a string
+  function extractJsonObjects(str: string): string[] {
+    const objects: string[] = [];
+    let depth = 0;
+    let start: number | null = null;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === '{') {
+        if (depth === 0) start = i;
+        depth++;
+      } else if (str[i] === '}') {
+        depth--;
+        if (depth === 0 && start !== null) {
+          const objStr = str.slice(start, i + 1);
+          objects.push(objStr);
+          start = null;
+        }
+      }
+    }
+    return objects;
+  }
+
   // Handle creating new database structure
   const handleCreateDatabase = async () => {
     setRelationalSchema(null); // Clear relational schema
@@ -80,12 +101,8 @@ export default function NoCodeDatabase() {
       let schemas = [];
       if (codeBlocks.length > 0) {
         for (const match of codeBlocks) {
-          let block = match[1].trim();
-          // If block contains multiple objects, split them
-          const objects = block
-            .split(/(?<=\})\s*(?=\{)/g) // split at boundaries between } and {
-            .map((s: string) => s.trim())
-            .filter(Boolean);
+          let block = match[1].trim().replace(/^```|```$/g, '').trim();
+          const objects = extractJsonObjects(block);
           for (const objStr of objects) {
             try {
               schemas.push(JSON.parse(objStr));

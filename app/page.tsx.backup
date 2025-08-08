@@ -1,0 +1,1163 @@
+"use client"
+
+import { useState, useEffect, Dispatch, SetStateAction } from "react"
+import { Plus, Database, Edit3, Eye, Sparkles, FileText } from "lucide-react"
+import { getLlamaResponse } from "../lib/llamaApi"
+import JsonTreeView from "@/components/JsonTreeView"
+import AddRowModal from "@/components/AddRowModal"
+import { getLlamaExplanation } from "../lib/llamaExplain"
+import { marked } from "marked"
+
+// Using direct JSON structures from LLM instead of predefined types
+
+// Component for editable table rows
+interface EditableTableRowProps {
+  fieldName: string;
+  fieldData: any;
+  fieldIndex: number;
+  tableName: string;
+  schemaIndex: number;
+  parsedRelationalSchema: any[];
+  setParsedRelationalSchema: Dispatch<SetStateAction<any[] | null>>;
+}
+
+const EditableTableRow = ({
+  fieldName,
+  fieldData,
+  fieldIndex,
+  tableName,
+  schemaIndex,
+  parsedRelationalSchema,
+  setParsedRelationalSchema
+}: EditableTableRowProps) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedFieldName, setEditedFieldName] = useState(fieldName);
+  const [editedFieldType, setEditedFieldType] = useState(fieldData.fieldType);
+  const [editedIsRequired, setEditedIsRequired] = useState(!!fieldData.isRequired);
+  
+  const handleSaveField = () => {
+    const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[schemaIndex]));
+    
+    // Remove the old field if name changed
+    if (fieldName !== editedFieldName) {
+      delete updatedSchema[tableName].fields[fieldName];
+    }
+    
+    // Add/update the field with new values
+    updatedSchema[tableName].fields[editedFieldName] = {
+      fieldId: editedFieldName,
+      fieldType: editedFieldType,
+      isRequired: editedIsRequired
+    };
+    
+    // Update the state
+    const newSchemas = [...parsedRelationalSchema];
+    newSchemas[schemaIndex] = updatedSchema;
+    setParsedRelationalSchema(newSchemas);
+    setIsEditing(false);
+  };
+  
+  return (
+    <tr className={fieldIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+      <td className="px-4 py-3 text-sm text-slate-900">
+        {isEditing ? (
+          <input 
+            type="text" 
+            className="w-full px-2 py-1 border border-blue-300 rounded text-sm"
+            value={editedFieldName}
+            onChange={(e) => setEditedFieldName(e.target.value)}
+          />
+        ) : fieldName}
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-900">
+        {isEditing ? (
+          <select
+            className="w-full px-2 py-1 border border-blue-300 rounded text-sm"
+            value={editedFieldType}
+            onChange={(e) => setEditedFieldType(e.target.value)}
+          >
+            <option value="TEXT">TEXT</option>
+            <option value="NUMERIC">NUMERIC</option>
+            <option value="BOOLEAN">BOOLEAN</option>
+            <option value="DATE">DATE</option>
+            <option value="DATETIME">DATETIME</option>
+            <option value="ARRAY">ARRAY</option>
+            <option value="OBJECT">OBJECT</option>
+          </select>
+        ) : fieldData.fieldType}
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-900">
+        {isEditing ? (
+          <input
+            type="checkbox"
+            className="h-4 w-4 text-blue-600 rounded"
+            checked={editedIsRequired}
+            onChange={(e) => setEditedIsRequired(e.target.checked)}
+          />
+        ) : fieldData.isRequired ? (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Yes</span>
+        ) : (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">No</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-900">
+        {isEditing ? (
+          <div className="flex space-x-2">
+            <button 
+              className="text-green-600 hover:text-green-800 text-xs"
+              onClick={handleSaveField}
+            >
+              Save
+            </button>
+            <button 
+              className="text-red-600 hover:text-red-800 text-xs"
+              onClick={() => setIsEditing(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button 
+            className="text-blue-600 hover:text-blue-800 text-xs"
+            onClick={() => setIsEditing(true)}
+          >
+            Edit
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+};
+
+export default function NoCodeDatabase() {
+  // State management
+  const [naturalLanguageInput, setNaturalLanguageInput] = useState("")
+  const [updateDescription, setUpdateDescription] = useState("")
+  const [selectedSchemaForUpdate, setSelectedSchemaForUpdate] = useState("")
+  const [schemas, setSchemas] = useState<any[]>([])
+  const [schemaObject, setSchemaObject] = useState<object | null>(null)
+  const [message, setMessage] = useState("")
+  const [userMessage, setUserMessage] = useState("")
+  const [messageType, setMessageType] = useState("")
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoadingDatabases, setIsLoadingDatabases] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [databasesText, setDatabasesText] = useState("");
+  const [relationalSchema, setRelationalSchema] = useState<string | object | null>(null)
+  const [isGeneratingRelational, setIsGeneratingRelational] = useState(false)
+  const [parsedRelationalSchema, setParsedRelationalSchema] = useState<any[] | null>(null);
+  const [nonRelationalSchemas, setNonRelationalSchemas] = useState<object[] | null>(null)
+  const [isLoadingNonRelational, setIsLoadingNonRelational] = useState(false)
+  const [selectedTable, setSelectedTable] = useState<any | null>(null);
+  const [schemaExplanation, setSchemaExplanation] = useState<string>("");
+  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
+  const [followUpQuestion, setFollowUpQuestion] = useState("");
+  const [followUpAnswer, setFollowUpAnswer] = useState("");
+  const [isLoadingFollowUp, setIsLoadingFollowUp] = useState(false);
+  const [relationalExplanation, setRelationalExplanation] = useState("");
+  const [isLoadingRelationalExplanation, setIsLoadingRelationalExplanation] = useState(false);
+  const [relationalFollowUpQuestion, setRelationalFollowUpQuestion] = useState("");
+  const [relationalFollowUpAnswer, setRelationalFollowUpAnswer] = useState("");
+  const [isLoadingRelationalFollowUp, setIsLoadingRelationalFollowUp] = useState(false);
+
+  // Clear message after 5 seconds
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => {
+        setMessage("")
+        setMessageType("")
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [message])
+
+  // Stack-based parser to extract all top-level JSON objects from a string
+  function extractJsonObjects(str: string): string[] {
+    const objects: string[] = [];
+    let depth = 0;
+    let start: number | null = null;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === '{') {
+        if (depth === 0) start = i;
+        depth++;
+      } else if (str[i] === '}') {
+        depth--;
+        if (depth === 0 && start !== null) {
+          const objStr = str.slice(start, i + 1);
+          objects.push(objStr);
+          start = null;
+        }
+      }
+    }
+    return objects;
+  }
+
+  // Handle creating new database structure
+  const handleCreateDatabase = async () => {
+    setRelationalSchema(null); // Clear relational schema
+    setParsedRelationalSchema(null); // Also clear the parsed relational schema
+    if (!naturalLanguageInput.trim()) {
+      setMessage("Please describe what kind of data you want to store.")
+      setMessageType("error")
+      return
+    }
+    setIsGenerating(true);
+    try {
+      console.log("1. Calling LLM with:", naturalLanguageInput);
+      const generatedSchema = await getLlamaResponse(naturalLanguageInput);
+      console.log("2. LLM Response:", generatedSchema);
+      // Extract all JSON code blocks (for multiple schemas)
+      const codeBlocks = [...generatedSchema.matchAll(/```json\s*([\s\S]+?)```/gi)];
+      let schemas = [];
+      if (codeBlocks.length > 0) {
+        for (const match of codeBlocks) {
+          let block = match[1].trim().replace(/^```|```$/g, '').trim();
+          const objects = extractJsonObjects(block);
+          for (const objStr of objects) {
+            try {
+              schemas.push(JSON.parse(objStr));
+            } catch (e) {
+              // Optionally handle parse errors
+            }
+          }
+        }
+      } else {
+        // Fallback: try to parse as a single JSON object
+        try {
+          schemas.push(JSON.parse(generatedSchema.trim()));
+        } catch (e) {
+          setMessage("Unable to parse JSON. Please make sure your input is valid JSON.");
+          setMessageType("error");
+          setIsGenerating(false);
+          return;
+        }
+      }
+      console.log("Non-relational schemas before setting state:", schemas);
+      // Always set schemaObject as an array for consistent handling
+      setSchemaObject(Array.isArray(schemas) ? schemas : [schemas]);
+      setSchemaExplanation(""); // Clear previous explanation
+      setMessage("Your database structure has been created successfully. You can now edit it below.")
+      setMessageType("success");
+    } catch (error) {
+      console.error("Error details:", error);
+      setMessage("Something went wrong. Please try describing your data differently.")
+      setMessageType("error");
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  // Handle showing all database structures
+  const handleSaveNonRelationalSchema = async () => {
+    console.log("Saving non-relational schema:", schemaObject);
+    try {
+      setIsLoading(true);
+      // Make API call to save schema
+      const response = await fetch("http://localhost:4441/no-code-db-api/form/schema", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ schemas: schemaObject }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to save schema: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      console.log("Schema saved successfully:", result);
+      setUserMessage("Non-relational schema saved successfully!");
+      
+      // Auto-dismiss success message after 3 seconds
+      setTimeout(() => {
+        setUserMessage("");
+      }, 3000);
+    } catch (error: any) {
+      console.error("Error saving schema:", error);
+      setUserMessage(`Error saving schema: ${error?.message || 'Unknown error'}`);
+      
+      // Auto-dismiss error message after 5 seconds
+      setTimeout(() => {
+        setUserMessage("");
+      }, 5000);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle showing all database structures
+  const handleShowAllDatabases = async () => {
+    setIsLoadingDatabases(true);
+    try {
+      // TODO: Implement API call to fetch all database structures
+      // const response = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      // const schemasData = await response.json();
+      // setSchemas(schemasData);
+
+      // TODO: Implement API call to fetch all database structures
+
+      //when a user wants to see all existing database schemas, you need to fetch them from your backend API and display them
+      const reponse = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      const schemasData = await reponse.json();
+      if (Array.isArray(schemasData)) {
+        // If schemasData is an array of objects
+        setParsedRelationalSchema(schemasData);
+      } else {
+        // Handle other cases if necessary
+        setParsedRelationalSchema([]);
+      }
+      setRelationalSchema(null); // Hide raw JSON if showing all
+      setMessage("Relational database schemas loaded successfully!");
+      setMessageType("success");
+    } catch (error) {
+      setMessage("Could not load your databases. Please try again.")
+      setMessageType("error")
+      setIsLoadingDatabases(false);
+    }
+  }
+
+  // Handle updating existing database structure
+  const handleUpdateDatabase = async () => {
+    if (!updateDescription.trim() || !selectedSchemaForUpdate) {
+      setMessage("Please select a database and describe what changes you want to make.")
+      setMessageType("error")
+      return
+    }
+
+    setIsUpdating(true);
+    try {
+      // TODO: Implement LLM call to convert natural language to database updates
+      // TODO: Implement API call to update database structure
+      const updateJson = await getLlamaResponse(updateDescription);
+
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/schema/${selectedSchemaForUpdate}', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json'},
+        body: JSON.stringify(updateJson),
+      })
+
+      setTimeout(() => {
+        setMessage(`Your "${selectedSchemaForUpdate}" database has been updated successfully.`)
+        setMessageType("success")
+        setUpdateDescription("")
+        setSelectedSchemaForUpdate("")
+        setIsUpdating(false);
+      }, 1500)
+    } catch (error) {
+      setMessage("Could not update your database. Please try again.")
+      setMessageType("error")
+      setIsUpdating(false);
+    }
+  }
+
+  const handleSchemaUpdate = (updatedSchema: object) => {
+    setSchemaObject(updatedSchema);
+    // You might want to auto-save or provide a save button here
+    console.log("Schema updated in parent:", updatedSchema);
+  };
+
+  const examplePrompts = [
+    {
+      icon: <Database className="w-5 h-5 text-blue-600" />,
+      text: "I need to store customer information with names, emails, and phone numbers",
+      category: "Customer Management",
+    },
+    {
+      icon: <FileText className="w-5 h-5 text-emerald-600" />,
+      text: "Create a product catalog with prices, descriptions, and inventory status",
+      category: "Inventory",
+    },
+    {
+      icon: <Edit3 className="w-5 h-5 text-purple-600" />,
+      text: "I want to track employee information including departments and hire dates",
+      category: "HR Management",
+    },
+    {
+      icon: <Eye className="w-5 h-5 text-indigo-600" />,
+      text: "Set up event bookings with attendee details and ticket quantities",
+      category: "Event Management",
+    },
+  ]
+
+  const handleGenerateRelationalDatabase = async () => {
+    setSchemaObject(null); // Clear NoSQL schema
+    setParsedRelationalSchema(null); // Clear previous parsed schema
+    if (!naturalLanguageInput.trim()) {
+      setMessage("Please describe what kind of data you want to store.");
+      setMessageType("error");
+      return;
+    }
+    setIsGeneratingRelational(true);
+    try {
+      console.log("1. Calling LLM with:", naturalLanguageInput);
+      const generatedSchema = await getLlamaResponse(naturalLanguageInput);
+      console.log("2. LLM Response:", generatedSchema);
+
+      // Extract all JSON code blocks (for multiple schemas)
+      const codeBlocks = [...generatedSchema.matchAll(/```json\s*([\s\S]+?)```/gi)];
+      let schemas = [];
+      if (codeBlocks.length > 0) {
+        for (const match of codeBlocks) {
+          let block = match[1].trim().replace(/^```|```$/g, '').trim();
+          const objects = extractJsonObjects(block);
+          for (const objStr of objects) {
+            try {
+              schemas.push(JSON.parse(objStr));
+            } catch (e) {
+              // Optionally handle parse errors
+            }
+          }
+        }
+      } else {
+        // Fallback: try to parse as a single JSON object
+        try {
+          schemas.push(JSON.parse(generatedSchema.trim()));
+        } catch (e) {
+          setMessage("Unable to parse JSON. Please make sure your input is valid JSON.");
+          setMessageType("error");
+          setIsGeneratingRelational(false);
+          return;
+        }
+      }
+      console.log("Schemas before setting state:", schemas);
+      // When setting parsedRelationalSchema, ensure it's always an array
+      setParsedRelationalSchema(Array.isArray(schemas) ? schemas : [schemas]);
+      setMessage("Your relational database schema has been generated successfully.");
+      setMessageType("success");
+    } catch (error) {
+      console.error("Error details:", error);
+      setMessage("Something went wrong. Please try describing your data differently.");
+      setMessageType("error");
+    } finally {
+      setIsGeneratingRelational(false);
+    }
+  }
+
+  // Handler to load all relational database schemas and show as tables
+  const handleLoadAllRelationalDatabases = async () => {
+    setIsLoadingDatabases(true);
+    try {
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      const schemasData = await response.json();
+      setNonRelationalSchemas(schemasData);
+      setSchemaObject(null); // Hide single schema view
+      setRelationalSchema(null); // Hide relational view
+      setParsedRelationalSchema(null);
+      setMessage("Relational database schemas loaded successfully!");
+      setMessageType("success");
+    } catch (error) {
+      setMessage("Could not load relational databases. Please try again.");
+      setMessageType("error");
+    } finally {
+      setIsLoadingDatabases(false);
+    }
+  };
+
+  // Handler to load all non-relational (NoSQL) database schemas
+  const handleLoadAllNonRelationalDatabases = async () => {
+    setIsLoadingNonRelational(true);
+    try {
+      const response = await fetch('http://localhost:4441/no-code-db-api/form/schema');
+      const schemasData = await response.json();
+      setNonRelationalSchemas(schemasData);
+      setSchemaObject(null); // Hide single schema view
+      setRelationalSchema(null); // Hide relational view
+      setParsedRelationalSchema(null);
+      setMessage("Non-relational database schemas loaded successfully!");
+      setMessageType("success");
+    } catch (error) {
+      setMessage("Could not load non-relational databases. Please try again.");
+      setMessageType("error");
+    } finally {
+      setIsLoadingNonRelational(false);
+    }
+  };
+
+  // Handler for explanation button
+  const handleExplainSchema = async () => {
+    if (!schemaObject) return;
+    setIsLoadingExplanation(true);
+    try {
+      const explanation = await getLlamaExplanation(schemaObject, naturalLanguageInput);
+      setSchemaExplanation(explanation);
+    } catch (explainError) {
+      setSchemaExplanation("Could not generate explanation.");
+    } finally {
+      setIsLoadingExplanation(false);
+    }
+  };
+
+  // Handler for follow-up question
+  const handleFollowUp = async () => {
+    if (!schemaObject || !followUpQuestion.trim()) return;
+    setIsLoadingFollowUp(true);
+    setFollowUpAnswer("");
+    try {
+      // Custom prompt for follow-up
+      const prompt = `Given this schema: ${JSON.stringify(schemaObject, null, 2)} and this user request: "${naturalLanguageInput}", answer this follow up question: "${followUpQuestion}"`;
+      // Reuse getLlamaExplanation for the follow-up
+      const answer = await getLlamaExplanation(schemaObject, prompt);
+      setFollowUpAnswer(answer);
+    } catch (err) {
+      setFollowUpAnswer("Could not get an answer to your follow up question.");
+    } finally {
+      setIsLoadingFollowUp(false);
+    }
+  };
+
+  // Handler for relational explanation
+  const handleExplainRelationalSchema = async () => {
+    if (!relationalSchema) return;
+    setIsLoadingRelationalExplanation(true);
+    setRelationalExplanation("");
+    try {
+      // Use the JSON schema as the context
+      const prompt = `Explain the following JSON schema in the context of this user request: "${naturalLanguageInput}"\n\nSchema:\n${typeof relationalSchema === "string" ? relationalSchema : JSON.stringify(relationalSchema, null, 2)}`;
+      const explanation = await getLlamaExplanation(relationalSchema, prompt);
+      setRelationalExplanation(explanation);
+    } catch (err) {
+      setRelationalExplanation("Could not generate explanation.");
+    } finally {
+      setIsLoadingRelationalExplanation(false);
+    }
+  };
+
+  // Handler for relational follow-up question
+  const handleRelationalFollowUp = async () => {
+    if (!relationalSchema || !relationalFollowUpQuestion.trim()) return;
+    setIsLoadingRelationalFollowUp(true);
+    setRelationalFollowUpAnswer("");
+    try {
+      const prompt = `Given this JSON schema: ${typeof relationalSchema === "string" ? relationalSchema : JSON.stringify(relationalSchema, null, 2)} and this user request: "${naturalLanguageInput}", answer this follow up question: "${relationalFollowUpQuestion}"`;
+      const answer = await getLlamaExplanation(relationalSchema, prompt);
+      setRelationalFollowUpAnswer(answer);
+    } catch (err) {
+      setRelationalFollowUpAnswer("Could not get an answer to your follow up question.");
+    } finally {
+      setIsLoadingRelationalFollowUp(false);
+    }
+  };
+
+  const handleSaveRelationalSchema = async () => {
+    console.log("Saving relational schema:", parsedRelationalSchema);
+    try {
+      setIsLoading(true);
+      // Make API call to save schema
+      const response = await fetch("http://localhost:4441/no-code-db-api/form/schema", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ schemas: parsedRelationalSchema }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to save schema: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      console.log("Schema saved successfully:", result);
+      setUserMessage("Relational schema saved successfully!");
+      setTimeout(() => {
+        setUserMessage("");
+      }, 3000);
+    } catch (error: any) {
+      console.error("Error saving schema:", error);
+      setUserMessage(`Error saving schema: ${error?.message || 'Unknown error'}`);
+      setTimeout(() => {
+        setUserMessage("");
+      }, 5000);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans">
+      {/* Notification Banner */}
+      {userMessage && (
+        <div className={`fixed top-4 right-4 max-w-md p-4 rounded-lg shadow-lg transition-all duration-300 z-50 ${userMessage.includes('Error') ? 'bg-red-50 border-l-4 border-red-500' : 'bg-green-50 border-l-4 border-green-500'}`}>
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              {userMessage.includes('Error') ? (
+                <svg className="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5 text-green-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+            <div className="ml-3">
+              <p className={`text-sm font-medium ${userMessage.includes('Error') ? 'text-red-800' : 'text-green-800'}`}>
+                {userMessage}
+              </p>
+            </div>
+            <div className="ml-auto pl-3">
+              <div className="-mx-1.5 -my-1.5">
+                <button 
+                  onClick={() => setUserMessage('')}
+                  className={`inline-flex rounded-md p-1.5 focus:outline-none focus:ring-2 focus:ring-offset-2 ${userMessage.includes('Error') ? 'text-red-500 hover:bg-red-100 focus:ring-red-600' : 'text-green-500 hover:bg-green-100 focus:ring-green-600'}`}
+                >
+                  <span className="sr-only">Dismiss</span>
+                  <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Subtle Background Elements */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-100 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"></div>
+        <div
+          className="absolute -bottom-40 -left-40 w-80 h-80 bg-indigo-100 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
+          style={{ animationDelay: "2s" }}
+        ></div>
+        <div
+          className="absolute top-40 left-40 w-80 h-80 bg-slate-100 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
+          style={{ animationDelay: "4s" }}
+        ></div>
+      </div>
+
+      {/* Header */}
+      <header className="relative bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900 text-white overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-black/20 to-transparent"></div>
+        <div className="relative max-w-7xl mx-auto px-8 py-20 text-center">
+          <div className="flex items-center justify-center mb-8">
+            <div className="bg-white/10 p-5 rounded-3xl backdrop-blur-sm border border-white/20">
+              <Database className="w-14 h-14 text-white" />
+            </div>
+          </div>
+          <h1 className="text-6xl font-extralight mb-6 tracking-tight leading-tight">
+            Intelligent Database
+            <span className="block font-light text-blue-200">Management Platform</span>
+          </h1>
+          <p className="text-xl font-light opacity-90 max-w-3xl mx-auto leading-relaxed mb-8">
+            Transform your data requirements into sophisticated database structures using natural language processing.
+            No technical expertise required.
+          </p>
+          <div className="flex items-center justify-center space-x-3 text-sm font-medium">
+            <Sparkles className="w-4 h-4 text-blue-300" />
+            <span className="text-blue-200">Powered by Advanced AI</span>
+            <Sparkles className="w-4 h-4 text-blue-300" />
+          </div>
+        </div>
+      </header>
+
+      <main className="relative max-w-7xl mx-auto px-8 py-16">
+        {/* Message Display */}
+        {message && (
+          <div
+            className={`mb-12 p-6 rounded-2xl border font-medium shadow-lg backdrop-blur-sm ${
+              messageType === "success"
+                ? "bg-gradient-to-r from-emerald-50 to-green-50 text-emerald-800 border-emerald-200"
+                : "bg-gradient-to-r from-red-50 to-rose-50 text-red-800 border-red-200"
+            }`}
+          >
+            <div className="flex items-center space-x-4">
+              <div
+                className={`w-2 h-2 rounded-full ${messageType === "success" ? "bg-emerald-500" : "bg-red-500"}`}
+              ></div>
+              <div className="font-medium">{message}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Create New Database Section */}
+        <section className="bg-white rounded-3xl shadow-2xl border border-slate-200/50 p-10 mb-16 backdrop-blur-sm">
+          <div className="flex items-start space-x-6 mb-10">
+            <div className="bg-gradient-to-br from-blue-500 to-blue-600 p-4 rounded-2xl shadow-lg">
+              <Plus className="w-8 h-8 text-white" />
+            </div>
+            <div className="flex-1">
+              <h2 className="text-4xl font-extralight text-slate-900 mb-3 tracking-tight">Create Database Structure</h2>
+              <p className="text-lg text-slate-600 font-light leading-relaxed">
+                Describe your data requirements in plain English and we'll generate the optimal database structure for
+                you.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-8">
+            <div>
+              <label htmlFor="natural-language-input" className="block text-lg font-medium text-slate-800 mb-4">
+                Describe your data requirements
+              </label>
+              <textarea
+                id="natural-language-input"
+                className="w-full p-6 border-2 border-slate-200 rounded-2xl text-base resize-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all duration-300 bg-gradient-to-br from-slate-50 to-blue-50/30 placeholder-slate-400 font-light leading-relaxed"
+                placeholder="Example: I want to keep track of my customers with their names, email addresses, phone numbers, and whether they're currently active. I also need to store their registration date and preferred contact method."
+                value={naturalLanguageInput}
+                onChange={(e) => setNaturalLanguageInput(e.target.value)}
+                rows={4}
+              />
+            </div>
+
+            {/* Example Prompts */}
+            <div>
+              <p className="text-sm font-medium text-slate-600 mb-4">Common use cases to get you started:</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {examplePrompts.map((prompt, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setNaturalLanguageInput(prompt.text)}
+                    className="text-left p-5 bg-gradient-to-br from-slate-50 to-blue-50/50 rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all duration-300 group"
+                  >
+                    <div className="flex items-start space-x-4">
+                      <div className="mt-1 group-hover:scale-110 transition-transform duration-200">{prompt.icon}</div>
+                      <div className="flex-1">
+                        <div className="text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">
+                          {prompt.category}
+                        </div>
+                        <div className="text-sm text-slate-700 group-hover:text-blue-700 transition-colors duration-200 font-light leading-relaxed">
+                          {prompt.text}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-4">
+              <button
+                className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white px-10 py-5 rounded-2xl font-medium text-lg hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+                onClick={handleCreateDatabase}
+                disabled={isGenerating}
+              >
+                {isGenerating ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    <span>Generating NoSQL Schema...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-6 h-6" />
+                    <span>Generate NoSQL Schema (MongoDB)</span>
+                  </>
+                )}
+              </button>
+              <button
+                className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 text-white px-10 py-5 rounded-2xl font-medium text-lg hover:from-indigo-700 hover:to-indigo-800 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+                onClick={handleGenerateRelationalDatabase}
+                disabled={isGeneratingRelational}
+              >
+                {isGeneratingRelational ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    <span>Generating Relational Schema...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-6 h-6" />
+                    <span>Generate Relational Database (PostgreSQL)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Database Management Section */}
+        <section className="bg-white rounded-3xl shadow-2xl border border-slate-200/50 p-10 mb-16 backdrop-blur-sm">
+          <div className="flex items-start space-x-6 mb-10">
+            <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 p-4 rounded-2xl shadow-lg">
+              <Eye className="w-8 h-8 text-white" />
+            </div>
+            <div className="flex-1">
+              <h2 className="text-4xl font-extralight text-slate-900 mb-3 tracking-tight">Database Management</h2>
+              <p className="text-lg text-slate-600 font-light leading-relaxed">
+                View, modify, and manage your existing database structures with intelligent assistance.
+              </p>
+            </div>
+          </div>
+
+          {/* Show All Databases */}
+          <div className="mb-10">
+            <div className="flex flex-col md:flex-row gap-4">
+              <button
+                className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-5 rounded-2xl font-medium text-lg hover:bg-blue-600 hover:text-white hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-4"
+                onClick={handleShowAllDatabases}
+                disabled={isLoadingDatabases}
+              >
+                {isLoadingDatabases ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-current"></div>
+                    <span>Loading Relational Databases...</span>
+                  </>
+                ) : (
+                  <>
+                    <Database className="w-6 h-6" />
+                    <span>Load All Relational Databases</span>
+                  </>
+                )}
+              </button>
+              <button
+                className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-5 rounded-2xl font-medium text-lg hover:bg-blue-600 hover:text-white hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-4"
+                onClick={handleLoadAllNonRelationalDatabases}
+                disabled={isLoadingNonRelational}
+              >
+                <Database className="w-6 h-6" />
+                <span>Load All Non Relational Databases</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Update Existing Database */}
+          <div className="border-t border-slate-200 pt-10">
+            <div className="flex items-center space-x-4 mb-8">
+              <Edit3 className="w-7 h-7 text-indigo-600" />
+              <h3 className="text-3xl font-extralight text-slate-900 tracking-tight">Modify Database Structure</h3>
+            </div>
+
+            <div className="space-y-8">
+              {schemas.length > 0 && (
+                <div>
+                  <label className="block text-lg font-medium text-slate-800 mb-4">Select database to modify</label>
+                  <select
+                    className="w-full p-5 border-2 border-slate-200 rounded-2xl text-base focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all duration-300 bg-gradient-to-br from-slate-50 to-blue-50/30 font-light"
+                    value={selectedSchemaForUpdate}
+                    onChange={(e) => setSelectedSchemaForUpdate(e.target.value)}
+                  >
+                    <option value="">Choose a database to modify...</option>
+                    {schemas.map((schema) => (
+                      <option key={schema.formId} value={schema.name}>
+                        {schema.name} ({schema.recordCount} records)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-lg font-medium text-slate-800 mb-4">
+                  Describe the changes you want to make
+                </label>
+                <textarea
+                  className="w-full p-6 border-2 border-slate-200 rounded-2xl text-base resize-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all duration-300 bg-gradient-to-br from-slate-50 to-blue-50/30 placeholder-slate-400 font-light leading-relaxed"
+                  placeholder="Example: Add a field for customer birthdays, remove the phone number field, or make the email field required for all entries."
+                  value={updateDescription}
+                  onChange={(e) => setUpdateDescription(e.target.value)}
+                  rows={3}
+                />
+              </div>
+
+              <button
+                className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 text-white px-10 py-5 rounded-2xl font-medium text-lg hover:from-indigo-700 hover:to-indigo-800 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+                onClick={handleUpdateDatabase}
+                disabled={isUpdating}
+              >
+                {isUpdating ? (
+                  <>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    <span>Applying Changes...</span>
+                  </>
+                ) : (
+                  <>
+                    <Edit3 className="w-6 h-6" />
+                    <span>Apply Database Changes</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Database Display Area */}
+        <section className="bg-white rounded-3xl shadow-2xl border border-slate-200/50 p-10 backdrop-blur-sm">
+          <div className="flex items-start space-x-6 mb-10">
+            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 p-4 rounded-2xl shadow-lg">
+              <FileText className="w-8 h-8 text-white" />
+            </div>
+            <div className="flex-1">
+              <h2 className="text-4xl font-extralight text-slate-900 mb-3 tracking-tight">Database Overview</h2>
+              <p className="text-lg text-slate-600 font-light leading-relaxed">
+                Comprehensive view of all your database structures and their configurations.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl p-8 border border-slate-200/50">
+            {/* Relational Generation: Show tables and JSON side by side */}
+            {/* Check for both schemaObject (non-relational) and parsedRelationalSchema (relational) */}
+            {schemaObject && Array.isArray(schemaObject) && schemaObject.length > 0 ? (
+              <div className="flex flex-col gap-8">
+                <div className="flex-1 space-y-4">
+                  <h3 className="text-xl font-semibold mb-4 text-slate-800">Non-Relational Schema</h3>
+                  {schemaObject.map((schema, index) => (
+                    <div key={index} className="schema-item bg-white rounded-xl shadow-md p-6 border border-slate-100">
+                      <div className="flex justify-between items-center mb-4">
+                        <h4 className="text-base font-semibold text-slate-700">Schema {index + 1}</h4>
+                        <div className="flex space-x-2">
+                          <button 
+                            className="px-3 py-1 bg-blue-50 text-blue-600 rounded-md text-sm hover:bg-blue-100 transition-colors"
+                            onClick={handleSaveNonRelationalSchema}
+                          >
+                            Save Changes
+                          </button>
+                        </div>
+                      </div>
+                      <JsonTreeView 
+                        data={schema} 
+                        onUpdate={(updatedSchema) => {
+                          const newSchemas = [...schemaObject];
+                          newSchemas[index] = updatedSchema;
+                          setSchemaObject(newSchemas);
+                        }}
+                        rootName={`schema-${index}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : parsedRelationalSchema && Array.isArray(parsedRelationalSchema) && parsedRelationalSchema.length > 0 ? (
+              <div className="flex flex-col gap-8">
+                <div className="mt-8">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-semibold text-slate-800">Relational Schema</h3>
+                    <button 
+                      className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
+                      onClick={() => {
+                        // Add a new table to the schema
+                        if (parsedRelationalSchema && parsedRelationalSchema.length > 0) {
+                          const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[0]));
+                          const newTableName = `newTable${Object.keys(updatedSchema).length + 1}`;
+                          
+                          // Create a new table with default fields
+                          updatedSchema[newTableName] = {
+                            tableName: newTableName,
+                            fields: {
+                              id: {
+                                fieldId: "id",
+                                fieldType: "TEXT",
+                                isRequired: true
+                              }
+                            }
+                          };
+                          
+                          // Update the state
+                          const newSchemas = [...parsedRelationalSchema];
+                          newSchemas[0] = updatedSchema;
+                          setParsedRelationalSchema(newSchemas);
+                        } else {
+                          // Create a new schema if none exists
+                          const newSchema = {
+                            newTable1: {
+                              tableName: "newTable1",
+                              fields: {
+                                id: {
+                                  fieldId: "id",
+                                  fieldType: "TEXT",
+                                  isRequired: true
+                                }
+                              }
+                            }
+                          };
+                          setParsedRelationalSchema([newSchema]);
+                        }
+                      }}
+                    >
+                      <Plus className="w-4 h-4 mr-1" /> Add New Table
+                    </button>
+                  </div>
+                  {parsedRelationalSchema.map((schema, index) => {
+                    // Extract table information from the schema
+                    const tables = Object.entries(schema).map(([tableName, tableData]: [string, any]) => {
+                      const fields = tableData.fields || {};
+                      return { tableName, fields };
+                    });
+                    
+                    return (
+                      <div key={index} className="schema-item bg-white rounded-xl shadow-md p-6 border border-slate-100">
+                        <div className="flex justify-between items-center mb-4">
+                          <h4 className="text-base font-semibold text-slate-700">Schema {index + 1}</h4>
+                          <div className="flex space-x-2">
+                            <button 
+                              className="px-3 py-1 bg-blue-50 text-blue-600 rounded-md text-sm hover:bg-blue-100 transition-colors"
+                              onClick={handleSaveRelationalSchema}
+                            >
+                              Save Changes
+                            </button>
+                          </div>
+                        </div>
+                        
+                        {/* Table format for relational schema */}
+                        <div className="space-y-6">
+                          {tables.map((table, tableIndex) => (
+                            <div key={tableIndex} className="border border-slate-200 rounded-lg overflow-hidden">
+                              <div className="bg-slate-100 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+                                <div className="flex items-center">
+                                  <button 
+                                    className="mr-2 text-slate-500 hover:text-slate-700"
+                                    onClick={() => {
+                                      // Prompt for new table name
+                                      const newTableName = prompt("Enter new table name:", table.tableName);
+                                      if (newTableName && newTableName !== table.tableName) {
+                                        // Create a copy of the current schema for editing
+                                        const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[index]));
+                                        
+                                        // Store the table data
+                                        const tableData = updatedSchema[table.tableName];
+                                        
+                                        // Delete the old table
+                                        delete updatedSchema[table.tableName];
+                                        
+                                        // Create the new table with updated name
+                                        updatedSchema[newTableName] = {
+                                          ...tableData,
+                                          tableName: newTableName
+                                        };
+                                        
+                                        // Update the state
+                                        const newSchemas = [...parsedRelationalSchema];
+                                        newSchemas[index] = updatedSchema;
+                                        setParsedRelationalSchema(newSchemas);
+                                      }
+                                    }}
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                  </button>
+                                  <h5 className="font-medium text-slate-800">{table.tableName}</h5>
+                                </div>
+                                <div className="flex space-x-2">
+                                  <button 
+                                    className="text-blue-600 hover:text-blue-800 text-xs flex items-center"
+                                    onClick={() => {
+                                      // Add a new field to this table
+                                      const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[index]));
+                                      const newFieldName = `newField${Object.keys(table.fields).length + 1}`;
+                                      updatedSchema[table.tableName].fields[newFieldName] = {
+                                        fieldId: newFieldName,
+                                        fieldType: "TEXT",
+                                        isRequired: false
+                                      };
+                                      
+                                      // Update the state
+                                      const newSchemas = [...parsedRelationalSchema];
+                                      newSchemas[index] = updatedSchema;
+                                      setParsedRelationalSchema(newSchemas);
+                                    }}
+                                  >
+                                    <Plus className="w-3 h-3 mr-1" /> Add Field
+                                  </button>
+                                  <button 
+                                    className="text-red-600 hover:text-red-800 text-xs flex items-center"
+                                    onClick={() => {
+                                      // Confirm deletion
+                                      if (confirm(`Are you sure you want to delete the table '${table.tableName}'?`)) {
+                                        // Create a copy of the current schema for editing
+                                        const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[index]));
+                                        
+                                        // Delete the table
+                                        delete updatedSchema[table.tableName];
+                                        
+                                        // Update the state
+                                        const newSchemas = [...parsedRelationalSchema];
+                                        newSchemas[index] = updatedSchema;
+                                        setParsedRelationalSchema(newSchemas);
+                                        
+                                        // Show notification
+                                        setUserMessage(`Table '${table.tableName}' deleted successfully.`);
+                                        setTimeout(() => setUserMessage(''), 3000);
+                                      }
+                                    }}
+                                  >
+                                    Delete Table
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-slate-200">
+                                  <thead className="bg-slate-50">
+                                    <tr>
+                                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Field Name</th>
+                                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Type</th>
+                                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Required</th>
+                                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
+                                     </tr>
+                                   </thead>
+                                   <tbody className="bg-white divide-y divide-slate-200">
+                                     {Object.entries(table.fields).map(([fieldName, fieldData]: [string, any], fieldIndex) => (
+                                       <tr key={fieldIndex} className={fieldIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                                         <td className="px-4 py-3 text-sm text-slate-900">{fieldName}</td>
+                                         <td className="px-4 py-3 text-sm text-slate-900">{fieldData.fieldType}</td>
+                                         <td className="px-4 py-3 text-sm text-slate-900">
+                                           {fieldData.isRequired ? (
+                                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Yes</span>
+                                           ) : (
+                                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">No</span>
+                                           )}
+                                         </td>
+                                         <td className="px-4 py-3 text-sm text-slate-900">
+                                           <div className="flex space-x-2">
+                                             <button 
+                                               className="text-blue-600 hover:text-blue-800 text-xs"
+                                               onClick={() => {
+                                                 // Create a copy of the current schema for editing
+                                                 const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[index]));
+                                                 
+                                                 // Toggle the required field
+                                                 const isCurrentlyRequired = !!fieldData.isRequired;
+                                                 updatedSchema[table.tableName].fields[fieldName].isRequired = !isCurrentlyRequired;
+                                                 
+                                                 // Update the state
+                                                 const newSchemas = [...parsedRelationalSchema];
+                                                 newSchemas[index] = updatedSchema;
+                                                 setParsedRelationalSchema(newSchemas);
+                                               }}
+                                             >
+                                               Toggle Required
+                                             </button>
+                                             <button 
+                                               className="text-red-600 hover:text-red-800 text-xs"
+                                               onClick={() => {
+                                                 // Create a copy of the current schema for editing
+                                                 const updatedSchema = JSON.parse(JSON.stringify(parsedRelationalSchema[index]));
+                                                 
+                                                 // Delete the field
+                                                 delete updatedSchema[table.tableName].fields[fieldName];
+                                                 
+                                                 // Update the state
+                                                 const newSchemas = [...parsedRelationalSchema];
+                                                 newSchemas[index] = updatedSchema;
+                                                 setParsedRelationalSchema(newSchemas);
+                                               }}
+                                             >
+                                               Delete
+                                             </button>
+                                           </div>
+                                         </td>
+                                       </tr>
+                                     ))}
+                                   </tbody>
+                                 </table>
+                               </div>
+                             </div>
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <p>No parsed schemas available.</p>
+            )}
+          </div>
+        </section>
+      </main>
+      <AddRowModal
+        table={selectedTable}
+        open={!!selectedTable}
+        onClose={() => setSelectedTable(null)}
+      />
+    </div>
+  )
+}

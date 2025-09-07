@@ -177,7 +177,10 @@ export default function FolderExplorer({
           className={`flex items-center space-x-2 py-1 px-2 rounded cursor-pointer hover:bg-zinc-800 ${
             isSelected ? 'bg-blue-600/20 text-blue-300' : 'text-zinc-300'
           }`}
-          onClick={() => onItemSelect(item)}
+          onClick={() => {
+            console.log('FolderExplorer: Clicking on item:', item)
+            onItemSelect(item)
+          }}
           onContextMenu={(e) => handleContextMenu(e, item)}
         >
           {isFolder && (

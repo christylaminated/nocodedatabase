@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { Database, FileText, Sparkles, Upload, BookOpen } from "lucide-react"
+import { Database, FileText, Sparkles, Upload, BookOpen, Search } from "lucide-react"
 
-type TabKey = "beginner" | "prompt" | "management" | "overview" | "csv-import"
+type TabKey = "beginner" | "prompt" | "management" | "overview" | "csv-import" | "querying"
 
 interface TabBarProps {
   active: TabKey
@@ -16,6 +16,7 @@ const tabs = [
   { key: "csv-import" as TabKey, label: "CSV Import", icon: Upload },
   { key: "management" as TabKey, label: "Database Management", icon: Database },
   { key: "overview" as TabKey, label: "Database Overview", icon: FileText },
+  { key: "querying" as TabKey, label: "Database Querying", icon: Search },
 ]
 
 export default function TabBar({ active, onChange }: TabBarProps) {

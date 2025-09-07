@@ -8,12 +8,14 @@ import AiPromptTab from "./AiPromptTab"
 import CsvImportTab from "./CsvImportTab"
 import DatabaseManagementTab from "./DatabaseManagementTab"
 import DatabaseOverviewTab from "./DatabaseOverviewTab"
+import QueryingTab from "./QueryingTab"
 import FormDataView from "./FormDataView"
 import FormRecordView from "./FormRecordView"
+import SimpleFormCreator from "../SimpleFormCreator"
 import TabBar from "./TabBar"
 import TabPanel from "./TabPanel"
 
-type TabKey = "beginner" | "prompt" | "management" | "overview" | "csv-import"
+type TabKey = "beginner" | "prompt" | "management" | "overview" | "csv-import" | "querying"
 
 interface Schema {
   appsId?: string
@@ -83,20 +85,23 @@ export default function Workspace() {
     setFormData({}) // Reset form data
   }
 
-  // Initialize with example project
+  // Initialize with example project only if no saved state
   useEffect(() => {
-    const exampleProject: Project = {
-      name: "exampleProject",
-      schemas: [{
-        formId: "testSchema",
-        fields: {
-          name: { fieldType: "TEXT", isRequired: true },
-          email: { fieldType: "TEXT", isRequired: true }
-        }
-      }],
-      forms: []
+    const savedState = localStorage.getItem("workspace-state")
+    if (!savedState) {
+      const exampleProject: Project = {
+        name: "exampleProject",
+        schemas: [{
+          formId: "testSchema",
+          fields: {
+            name: { fieldType: "TEXT", isRequired: true },
+            email: { fieldType: "TEXT", isRequired: true }
+          }
+        }],
+        forms: []
+      }
+      setProjects([exampleProject])
     }
-    setProjects([exampleProject])
   }, [])
 
   // Load state from localStorage on mount
@@ -576,13 +581,16 @@ export default function Workspace() {
   }
 
   const handleItemSelect = (item: any) => {
+    console.log('Workspace: handleItemSelect called with:', item)
     setSelectedItem({
       type: item.type,
       path: item.path
     })
+    console.log('Workspace: selectedItem set to:', { type: item.type, path: item.path })
     
     // Automatically switch to overview tab when a schema or form is selected
     if (item.type === 'schema' || item.type === 'form') {
+      console.log('Workspace: Switching to overview tab')
       setActive('overview')
     }
   }
@@ -822,10 +830,18 @@ export default function Workspace() {
                   </div>
                   <div className={`absolute inset-0 ${active === "overview" ? "block" : "hidden"}`}>
                     {selectedFormRecord ? (
-                      <FormRecordView
+                      <FormRecordView 
                         record={selectedFormRecord}
-                        schema={getSchemaForRecord(selectedFormRecord.schemaName, selectedItem?.path[1] || '')}
+                        schema={getSchemaForRecord(selectedFormRecord.schemaName, selectedFormRecord.id.split('-')[0])}
                         onBack={() => setSelectedFormRecord(null)}
+                      />
+                    ) : selectedItem?.type === 'schema' && formCreationSchema ? (
+                      <SimpleFormCreator
+                        schema={formCreationSchema}
+                        formData={formData}
+                        onFormDataChange={setFormData}
+                        onFormSubmit={handleFormSubmit}
+                        onFormCancel={() => setFormCreationSchema(null)}
                       />
                     ) : selectedItem?.type === 'form' && selectedItem.path.length === 5 && selectedItem.path[2] === 'form' ? (
                       (() => {
@@ -873,6 +889,9 @@ export default function Workspace() {
                         unsavedSchemas={{}}
                       />
                     )}
+                  </div>
+                  <div className={`absolute inset-0 ${active === "querying" ? "block" : "hidden"}`}>
+                    <QueryingTab />
                   </div>
                 </div>
               </section>

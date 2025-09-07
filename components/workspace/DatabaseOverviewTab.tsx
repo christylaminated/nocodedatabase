@@ -275,10 +275,16 @@ export default function DatabaseOverviewTab({
     if (selectedItem.type === 'schema') {
       const projectName = selectedItem.path[1]
       const schemaId = selectedItem.path[3]
+      console.log('DEBUG: Looking for project:', projectName, 'schema:', schemaId)
+      console.log('DEBUG: Available projects:', projects.map(p => ({ name: p.name, schemaCount: p.schemas?.length })))
       const project = projects.find(p => p.name === projectName)
+      console.log('DEBUG: Found project:', project)
       
       if (project && project.schemas) {
-        return project.schemas.find((s: Schema) => s.formId === schemaId)
+        console.log('DEBUG: Project schemas:', project.schemas.map((s: Schema) => s.formId))
+        const schema = project.schemas.find((s: Schema) => s.formId === schemaId)
+        console.log('DEBUG: Found schema:', schema)
+        return schema
       }
     }
     
@@ -287,6 +293,7 @@ export default function DatabaseOverviewTab({
 
   const renderSchemaDetails = () => {
     const selectedSchema = getSelectedSchema()
+    console.log('DatabaseOverviewTab: selectedSchema result:', selectedSchema)
     const hasSchemaArray = schemaObject && Array.isArray(schemaObject) && schemaObject.length > 0
     const isSchemaFolderSelected = selectedItem?.type === 'folder' && selectedItem?.path?.length === 3 && selectedItem?.path[2] === 'schema'
     
@@ -421,7 +428,7 @@ export default function DatabaseOverviewTab({
         {hasSchemaArray && (
           <div className="flex justify-center">
             <Button
-              onClick={handleAddAllSchemas}
+              onClick={() => handleAddAllSchemas('mongodb')}
               className="bg-green-600 hover:bg-green-700 text-white"
               size="lg"
             >

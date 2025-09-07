@@ -422,6 +422,67 @@ const JsonTreeView = ({ data, onUpdate, rootName = "root", viewAsTable = false }
     }
   };
 
+  // Confirm schema handler for PostgreSQL (Relational):
+  // POST to http://localhost:4441/no-code-db-api/relational/form/schema
+  const handleConfirmSchemaPostgres = async (schema: any) => {
+    const schemaId = schema.formId || (Array.isArray(schema) ? 'multiple' : 'unknown');
+    setConfirming(`postgres_${schemaId}`);
+    setConfirmMessages((prev) => ({ ...prev, [`postgres_${schemaId}`]: "Saving to PostgreSQL..." }));
+    
+    try {
+      console.log(`Sending POST request to save schema to PostgreSQL: ${schemaId}`);
+      
+      if (Array.isArray(schema)) {
+        // If schema is an array, POST each one individually
+        for (const singleSchema of schema) {
+          console.log("Sending schema to PostgreSQL:", singleSchema);
+          const response = await fetch('http://localhost:4441/no-code-db-api/relational/form/schema', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(singleSchema)
+          });
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Error saving schema to PostgreSQL: ${errorText}`);
+            throw new Error('Failed to save one of the schemas to PostgreSQL');
+          }
+        }
+        setConfirmMessages((prev) => ({ ...prev, postgres_all: 'All schemas saved to PostgreSQL!' }));
+      } else {
+        console.log("Sending schema to PostgreSQL:", schema);
+        const response = await fetch('http://localhost:4441/no-code-db-api/relational/form/schema', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(schema)
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`Error saving schema to PostgreSQL: ${errorText}`);
+          throw new Error('Failed to save schema to PostgreSQL');
+        }
+        
+        console.log(`Schema ${schemaId} saved to PostgreSQL successfully`);
+        setConfirmMessages((prev) => ({ ...prev, [`postgres_${schemaId}`]: 'Schema saved to PostgreSQL!' }));
+      }
+      
+      // Clear message after 3 seconds
+      setTimeout(() => {
+        setConfirmMessages(prev => {
+          const newMessages = { ...prev };
+          delete newMessages[`postgres_${schemaId}`];
+          return newMessages;
+        });
+      }, 3000);
+    } catch (error: any) {
+      console.error('Error in handleConfirmSchemaPostgres:', error);
+      setConfirmMessages(prev => ({ ...prev, [`postgres_${schemaId}`]: `Error saving to PostgreSQL: ${error.message}` }));
+    } finally {
+      setConfirming("");
+    }
+  };
+
   // Helper function to ensure all fields in a schema are properly populated
   const ensureCompleteFields = (schema: any): any => {
     if (!schema || !schema.fields) return schema;
@@ -571,12 +632,23 @@ const JsonTreeView = ({ data, onUpdate, rootName = "root", viewAsTable = false }
                 <button className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-1 rounded hover:bg-emerald-700" onClick={() => openAddDocumentModal(schema)}>
                   <Plus className="w-4 h-4" /> Add Document
                 </button>
+              </div>
+            </div>
+            <div className="flex items-center mb-2 ml-4">
+              <div className="flex flex-col gap-2">
                 <button
-                  className="ml-2 flex items-center gap-1 bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                  className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                   onClick={() => handleConfirmSchema(schema)}
                   disabled={confirming === (schema.formId || "unknown")}
                 >
-                  {confirming === (schema.formId || "unknown") ? 'Confirming...' : 'Confirm Schema'}
+                  {confirming === (schema.formId || "unknown") ? 'Confirming...' : 'Save to MongoDB'}
+                </button>
+                <button
+                  className="flex items-center gap-1 bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700"
+                  onClick={() => handleConfirmSchemaPostgres(schema)}
+                  disabled={confirming === `postgres_${schema.formId || "unknown"}`}
+                >
+                  {confirming === `postgres_${schema.formId || "unknown"}` ? 'Saving...' : 'Save to PostgreSQL'}
                 </button>
               </div>
             </div>
@@ -600,6 +672,9 @@ const JsonTreeView = ({ data, onUpdate, rootName = "root", viewAsTable = false }
           </div>
           {confirmMessages[schema.formId] && (
             <div className="text-sm text-blue-700 mb-2">{confirmMessages[schema.formId]}</div>
+          )}
+          {confirmMessages[`postgres_${schema.formId}`] && (
+            <div className="text-sm text-blue-700 mb-2">{confirmMessages[`postgres_${schema.formId}`]}</div>
           )}
           <JsonNode name={rootName} value={schema} path={[]} onUpdate={handleUpdate} isRoot />
         </div>

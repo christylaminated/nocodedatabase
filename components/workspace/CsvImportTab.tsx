@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react"
 import { FileText, Database, Loader2, Upload, X } from "lucide-react"
+import { parseExcelCsv, detectDelimiter } from "../../lib/excelCsvParser"
 
 interface FormRecord {
   id: string
@@ -43,9 +44,24 @@ export default function CsvImportTab({
   }
 
   const parseCsvContent = (content: string) => {
-    const lines = content.split('\n').filter(line => line.trim())
-    const data = lines.map(line => line.split(',').map(cell => cell.trim().replace(/"/g, '')))
-    setCsvData(data)
+    try {
+      // Detect delimiter first (handles sep= hint if present)
+      const delimiter = detectDelimiter(content)
+      // Parse with Excel-compatible parser
+      const data = parseExcelCsv(content, delimiter)
+      
+      if (data.length === 0) {
+        throw new Error('No data found in CSV')
+      }
+      
+      setCsvData(data)
+    } catch (error) {
+      console.error('Error parsing CSV:', error)
+      if (setMessage && setMessageType) {
+        setMessage('Failed to parse CSV file. Please check the format and try again.')
+        setMessageType('error')
+      }
+    }
   }
 
   const generateSchemaFromCsv = async (dbType: 'mongodb' | 'postgresql') => {
@@ -94,26 +110,73 @@ export default function CsvImportTab({
       
       console.log('✅ App created successfully')
       
-      // Step 2: Infer field types from sample data
-      const fields: Record<string, any> = {}
-      
-      headers.forEach((header, index) => {
-        const sampleValue = sampleRow[index] || ''
-        let fieldType = 'TEXT'
+      // Helper function to detect type of a single value
+      const detectType = (value: string): string => {
+        if (!value || value.trim() === '') return 'TEXT';
         
-        // Simple type inference
-        if (!isNaN(Number(sampleValue)) && sampleValue !== '') {
-          fieldType = 'NUMERIC'
-        } else if (sampleValue.toLowerCase() === 'true' || sampleValue.toLowerCase() === 'false') {
-          fieldType = 'BOOLEAN'
+        const lowerVal = value.toLowerCase();
+        if (lowerVal === 'true' || lowerVal === 'false') return 'BOOLEAN';
+        if (!isNaN(Number(value)) && value !== '') return 'NUMERIC';
+        if (!isNaN(Date.parse(value))) return 'DATE';
+        if (/^\$?\d+(\.\d{2})?$/.test(value)) return 'MONEY';
+        return 'TEXT';
+      };
+
+      // Step 2: Infer field types from all data with 90% threshold
+      const fields: Record<string, any> = {};
+      const allWarnings: string[] = [];
+      
+      // Process each column
+      headers.forEach((header, colIndex) => {
+        const values = dataRows.map(row => row[colIndex] || '').filter(v => v.trim() !== '');
+        const typeCounts: Record<string, number> = {};
+        
+        // Count occurrences of each type
+        values.forEach(value => {
+          const type = detectType(value);
+          typeCounts[type] = (typeCounts[type] || 0) + 1;
+        });
+        
+        // Find type with >=90% occurrence
+        let fieldType = 'TEXT';
+        const total = values.length;
+        
+        if (total > 0) {
+          for (const [type, count] of Object.entries(typeCounts)) {
+            if (count / total >= 0.9) {
+              fieldType = type;
+              // Log warnings for coerced values
+              if (count < values.length) {
+                allWarnings.push(
+                  `Column "${header}": Coerced ${values.length - count} value(s) to null`
+                );
+              }
+              break;
+            }
+          }
         }
         
+        // Set field properties
         fields[header] = {
           fieldId: header,
           fieldType: fieldType,
-          allowMultiple: false
-        }
-      })
+          allowMultiple: false,
+          ...(fieldType === 'MONEY' && {
+            fractionDigits: 2,
+            currencyCode: 'USD'
+          })
+        };
+      });
+      
+      // Show warnings if any
+      if (allWarnings.length > 0 && setMessage && setMessageType) {
+        console.warn('Type inference warnings:', allWarnings);
+        setMessage(
+          `Schema generated with ${allWarnings.length} warning(s). ` +
+          `Check console for details.`
+        );
+        setMessageType('info');
+      }
 
       // Step 3: Create Schema with proper structure
       const schema = {
